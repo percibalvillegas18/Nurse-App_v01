@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Card, Typography, Alert, Divider, Space, message } from 'antd';
-import { UserOutlined, LockOutlined, SafetyOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, SafetyOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
@@ -14,10 +14,7 @@ function getInitialValues() {
     const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Only use saved if it has username, keep password if present
-      if (parsed.username) {
-        return parsed;
-      }
+      if (parsed.username) return parsed;
     }
   } catch {}
   return DEFAULT_CREDENTIALS;
@@ -26,7 +23,7 @@ function getInitialValues() {
 export const Login: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [genericError, setGenericError] = useState<string | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{ username: string; password: string } | null>(() => {
     try {
       const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
@@ -38,7 +35,6 @@ export const Login: React.FC = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  // On mount, restore last attempt into form so refresh keeps what user typed
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
@@ -59,71 +55,79 @@ export const Login: React.FC = () => {
   };
 
   const onValuesChange = (_changed: any, allValues: { username: string; password: string }) => {
-    // Persist as user types, so even if page refreshes, we keep last action
     persistAttempt(allValues);
+    // Clear field errors as user types to fix it
+    if (_changed.username !== undefined) {
+      form.setFields([{ name: 'username', errors: [] }]);
+    }
+    if (_changed.password !== undefined) {
+      form.setFields([{ name: 'password', errors: [] }]);
+    }
+    if (genericError) setGenericError(null);
   };
 
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true);
-    setError(null);
-    // Save what user typed - so we can restore after error AND after refresh
+    setGenericError(null);
+    // Clear previous field errors
+    form.setFields([
+      { name: 'username', errors: [] },
+      { name: 'password', errors: [] },
+    ]);
     persistAttempt(values);
     setLastAttempt({ ...values });
     
     try {
       await login(values.username, values.password);
-      // On success, clear last attempt error but keep username for next time? Keep it.
-      message.success(`Welcome ${values.username}! Login successful!`);
-      // Optionally clear error and keep last successful login in storage
-      localStorage.removeItem(LAST_ATTEMPT_KEY); // or keep? Let's keep username but clear password for security? For demo keep both.
-      // For demo, keep last successful to show persistence works
+      message.success(`Welcome ${values.username}!`);
       persistAttempt(values);
       navigate('/dashboard');
     } catch (err: any) {
       console.error('Login error:', err, err.response?.data);
       
-      // Parse error message - handle array, string, and different backend formats
+      const errorCode = err.response?.data?.errorCode || '';
       let rawMessage = err.response?.data?.message || err.response?.data?.error || err.message || 'Login failed';
+      if (Array.isArray(rawMessage)) rawMessage = rawMessage.join(', ');
       
-      if (Array.isArray(rawMessage)) {
-        rawMessage = rawMessage.join(', ');
-      }
-      
-      let userFriendlyMessage = rawMessage;
       const lowerMsg = String(rawMessage).toLowerCase();
-      
-      if (lowerMsg.includes('user not found') || lowerMsg.includes('invalid credentials') || lowerMsg.includes('incorrect password')) {
-        if (lowerMsg.includes('password must be') || lowerMsg.includes('incorrect password')) {
-          userFriendlyMessage = `Incorrect password for "${values.username}". Demo password is Password123! You typed ${values.password.length} chars.`;
-        } else if (lowerMsg.includes('not found')) {
-          userFriendlyMessage = `Username "${values.username}" not found. Check spelling. Valid: admin.system, susan.lee, etc.`;
+      const isUserNotFound = errorCode === 'USER_NOT_FOUND' || lowerMsg.includes('not found') || lowerMsg.includes('username') && lowerMsg.includes('not found');
+      const isInvalidPassword = errorCode === 'INVALID_PASSWORD' || lowerMsg.includes('incorrect password') || (lowerMsg.includes('invalid credentials') && !isUserNotFound);
+      const isLocked = lowerMsg.includes('locked');
+      const isInactive = lowerMsg.includes('inactive') || lowerMsg.includes('suspended') || lowerMsg.includes('status is');
+
+      // OPTION A: Inline field errors - position error directly under the field that failed
+      if (isUserNotFound) {
+        const msg = `Username "${values.username}" not found. Check spelling. Valid: admin.system, susan.lee, etc.`;
+        form.setFields([{ name: 'username', errors: [msg] }]);
+        // Keep password as typed, don't reset
+        form.setFieldsValue({ username: values.username, password: values.password });
+        message.warning(msg, 4);
+      } else if (isInvalidPassword) {
+        const msg = `Incorrect password for "${values.username}". Demo is Password123! (you typed ${values.password.length} chars)`;
+        form.setFields([{ name: 'password', errors: [msg] }]);
+        form.setFieldsValue({ username: values.username, password: values.password });
+        message.warning(msg, 4);
+      } else if (isLocked || isInactive) {
+        // Generic errors that are not field-specific -> show top Alert
+        let friendly = rawMessage;
+        if (isLocked) friendly = `Account locked: ${rawMessage}. Try after 15 min.`;
+        if (isInactive) friendly = `Account issue: ${rawMessage}. Contact HR.`;
+        setGenericError(friendly);
+        message.error(friendly, 5);
+        form.setFieldsValue(values);
+      } else {
+        // Fallback: if we can't determine field, show generic top error but also try to guess
+        if (lowerMsg.includes('password')) {
+          form.setFields([{ name: 'password', errors: [String(rawMessage)] }]);
+        } else if (lowerMsg.includes('username') || lowerMsg.includes('user')) {
+          form.setFields([{ name: 'username', errors: [String(rawMessage)] }]);
         } else {
-          userFriendlyMessage = `Invalid username or password. You entered username="${values.username}". Demo password: Password123!`;
+          setGenericError(`${rawMessage} (you tried "${values.username}")`);
+          message.error(String(rawMessage), 5);
         }
-      } else if (lowerMsg.includes('locked')) {
-        userFriendlyMessage = `Account locked: ${rawMessage}`;
-      } else if (lowerMsg.includes('inactive') || lowerMsg.includes('suspended') || lowerMsg.includes('status')) {
-        userFriendlyMessage = `Account issue: ${rawMessage}`;
-      } else if (lowerMsg.includes('longer than') || lowerMsg.includes('shorter than')) {
-        userFriendlyMessage = `Validation: ${rawMessage}`;
-      } else if (err.response?.status === 401) {
-        userFriendlyMessage = `Auth failed: ${rawMessage}. You tried "${values.username}".`;
-      } else if (err.response?.status === 400) {
-        userFriendlyMessage = `${rawMessage}. You entered "${values.username}".`;
-      } else if (!err.response) {
-        userFriendlyMessage = `Cannot connect to server (${err.message})`;
+        form.setFieldsValue(values);
       }
-      
-      setError(userFriendlyMessage);
-      message.error(userFriendlyMessage, 6);
-      
-      // CRITICAL: Keep what user typed, don't reset to default admin.system
-      // Even after error, restore exact values
-      form.setFieldsValue({
-        username: values.username,
-        password: values.password,
-      });
-      // Persist again so refresh keeps it
+
       persistAttempt(values);
       setLastAttempt({ ...values });
     } finally {
@@ -134,16 +138,24 @@ export const Login: React.FC = () => {
   const fillDemoAccount = (username: string) => {
     const newValues = { username, password: 'Password123!' };
     form.setFieldsValue(newValues);
+    form.setFields([
+      { name: 'username', errors: [] },
+      { name: 'password', errors: [] },
+    ]);
     persistAttempt(newValues);
     setLastAttempt(newValues);
-    setError(null);
+    setGenericError(null);
   };
 
   const clearAndResetDefault = () => {
     localStorage.removeItem(LAST_ATTEMPT_KEY);
     form.setFieldsValue(DEFAULT_CREDENTIALS);
+    form.setFields([
+      { name: 'username', errors: [] },
+      { name: 'password', errors: [] },
+    ]);
     setLastAttempt(DEFAULT_CREDENTIALS);
-    setError(null);
+    setGenericError(null);
   };
 
   return (
@@ -164,44 +176,34 @@ export const Login: React.FC = () => {
           borderRadius: 16,
         }}
       >
-        <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <SafetyOutlined style={{ fontSize: 48, color: '#1677ff', marginBottom: 12 }} />
-          <Title level={3} style={{ marginBottom: 4 }}>
+        <div style={{ textAlign: 'center', marginBottom: 16 }}>
+          <SafetyOutlined style={{ fontSize: 42, color: '#1677ff', marginBottom: 10 }} />
+          <Title level={4} style={{ marginBottom: 2 }}>
             Nurse-App
           </Title>
-          <Text type="secondary">Hospital Workforce Management</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>Hospital Workforce Management</Text>
           <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <Text type="secondary" style={{ fontSize: 11 }}>
             RBAC Secured System
           </Text>
-          {lastAttempt && (
-            <div style={{ marginTop: 8, fontSize: 11, color: lastAttempt.username === DEFAULT_CREDENTIALS.username ? '#999' : '#1677ff', background: '#f0f5ff', padding: '4px 8px', borderRadius: 4, display: 'inline-block' }}>
-              Last typed: <strong>{lastAttempt.username}</strong> {lastAttempt.username !== DEFAULT_CREDENTIALS.username ? '(preserved)' : '(default)'}
+          {lastAttempt && lastAttempt.username !== DEFAULT_CREDENTIALS.username && (
+            <div style={{ marginTop: 6, fontSize: 10, color: '#1677ff', background: '#f0f5ff', padding: '3px 8px', borderRadius: 10, display: 'inline-block' }}>
+              <InfoCircleOutlined style={{ marginRight: 4 }} />
+              Last: <strong>{lastAttempt.username}</strong> (preserved after refresh)
             </div>
           )}
         </div>
 
-        {error && (
+        {/* Generic errors only (locked, inactive) - field-specific errors shown inline under inputs */}
+        {genericError && (
           <Alert
-            message="Login Failed - Your input preserved"
-            description={
-              <div style={{ whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
-                <div style={{ marginBottom: 8 }}>{error}</div>
-                {lastAttempt && (
-                  <div style={{ padding: 8, background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 4, fontSize: 12 }}>
-                    <strong>✓ Your last action preserved (not reset to admin):</strong><br/>
-                    Username: <code style={{ background: '#fff', padding: '2px 4px' }}>{lastAttempt.username}</code><br/>
-                    Password: <code style={{ background: '#fff', padding: '2px 4px' }}>{'*'.repeat(lastAttempt.password.length)} ({lastAttempt.password.length} chars)</code><br/>
-                    <span style={{ fontSize: 11, color: '#666' }}>Even if you refresh page, same values will stay. Fix error and try again.</span>
-                  </div>
-                )}
-              </div>
-            }
+            message="Authentication Issue"
+            description={<div style={{ whiteSpace: 'pre-line', fontSize: 12 }}>{genericError}</div>}
             type="error"
             showIcon
             closable
-            onClose={() => setError(null)}
-            style={{ marginBottom: 20, textAlign: 'left' }}
+            onClose={() => setGenericError(null)}
+            style={{ marginBottom: 16, fontSize: 12 }}
           />
         )}
 
@@ -214,10 +216,13 @@ export const Login: React.FC = () => {
           size="large"
           preserve={true}
           initialValues={getInitialValues()}
+          style={{ marginBottom: 0 }}
         >
           <Form.Item
             name="username"
             rules={[{ required: true, message: 'Please input your username!' }]}
+            style={{ marginBottom: 16 }}
+            hasFeedback
           >
             <Input prefix={<UserOutlined />} placeholder="Username or Email" allowClear />
           </Form.Item>
@@ -225,41 +230,48 @@ export const Login: React.FC = () => {
           <Form.Item
             name="password"
             rules={[{ required: true, message: 'Please input your password!' }]}
+            style={{ marginBottom: 16 }}
+            hasFeedback
           >
             <Input.Password prefix={<LockOutlined />} placeholder="Password" allowClear />
           </Form.Item>
 
-          <Form.Item style={{ marginBottom: 12 }}>
+          <Form.Item style={{ marginBottom: 8 }}>
             <Button type="primary" htmlType="submit" loading={loading} block>
               Log in
             </Button>
           </Form.Item>
           <Form.Item style={{ marginBottom: 0, textAlign: 'center' }}>
-            <Button type="link" size="small" onClick={clearAndResetDefault} style={{ fontSize: 11 }}>
+            <Button type="link" size="small" onClick={clearAndResetDefault} style={{ fontSize: 10, padding: 0 }}>
               Reset to default admin.system
             </Button>
           </Form.Item>
         </Form>
 
-        <Divider style={{ margin: '16px 0' }}>Demo Accounts (click to fill)</Divider>
+        <Divider style={{ margin: '12px 0' }}>Demo Accounts (click to fill)</Divider>
 
-        <Space direction="vertical" size={4} style={{ width: '100%', fontSize: 12 }}>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            Password for all: <Text code>Password123!</Text> - Last typed preserved after error & refresh
+        <Space direction="vertical" size={2} style={{ width: '100%', fontSize: 11 }}>
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            Password: <Text code style={{ fontSize: 10 }}>Password123!</Text> - Inline errors under fields, input preserved
           </Text>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, fontSize: 11 }}>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('admin.system')}>• admin.system (ADMIN)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('susan.lee')}>• susan.lee (MGR)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('james.wilson')}>• james.wilson (CHARGE)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('maria.garcia')}>• maria.garcia (RN)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('rachel.brown')}>• rachel.brown (SCHED)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: 0, height: 'auto', fontSize: 11 }} onClick={() => fillDemoAccount('patricia.johnson')}>• patricia.johnson (HR)</Button>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, fontSize: 10 }}>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('admin.system')}>• admin.system (ADMIN)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('susan.lee')}>• susan.lee (MGR)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('james.wilson')}>• james.wilson (CHARGE)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('maria.garcia')}>• maria.garcia (RN)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('rachel.brown')}>• rachel.brown (SCHED)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('patricia.johnson')}>• patricia.johnson (HR)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('ahmed.hassan')}>• ahmed.hassan (RN)</Button>
+            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 20, fontSize: 10 }} onClick={() => fillDemoAccount('michael.wong')}>• michael.wong (COMPL)</Button>
+          </div>
+          <div style={{ fontSize: 9, color: '#999', fontStyle: 'italic', background: '#fafafa', padding: '4px 6px', borderRadius: 4, border: '1px dashed #e8e8e8' }}>
+            <strong>Option A implemented:</strong> Wrong username → red border + error under username field, password preserved. Wrong password → red border under password, username preserved. No big top Alert, no layout shift, no refresh reset.
           </div>
         </Space>
 
-        <div style={{ marginTop: 12, textAlign: 'center' }}>
-          <Text type="secondary" style={{ fontSize: 10 }}>
-            Secured by rbac.evaluate_access() - Input preserved in localStorage
+        <div style={{ marginTop: 10, textAlign: 'center' }}>
+          <Text type="secondary" style={{ fontSize: 9 }}>
+            Secured by rbac.evaluate_access() - Inline validation
           </Text>
         </div>
       </Card>
