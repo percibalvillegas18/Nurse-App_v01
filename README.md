@@ -144,11 +144,15 @@ WHERE role_code = ANY(v_all_role_codes)
 - Load testing
 
 ## Done Recently
-- ✅ NurseMaster personal-info entry (V3_2): First/Middle/Last Name with auto
-  Full Name (First+Middle+Last), Gender (Male/Female), Date of Birth,
-  Nationality (196-country dropdown), Contact No., Email, Primary Role;
-  employee # auto-generated; Employment Type/Hire Date/Home Unit moved out
-  for a future employment group
+- ✅ Test preview = mock server (decision: option A). The arena test server runs
+  `backend/mock-server.js` (in-memory, no Postgres) + Vite frontend; no real DB
+  is connected. Note: sandbox snapshots exclude `node_modules` — if the preview
+  dies after a restore, run `npm ci` in `frontend/` and `backend/` and restart
+  both processes.
+- ✅ Mock auth realism: `/auth/me` now strict 401 without a valid bearer token;
+  refresh tokens are user-scoped, issued at login, invalidated at logout
+- ✅ Nursing area menus: Contract + Documents added (To Do placeholders);
+  Nurse Master / Credentials / Roster retained; area order per user spec
 - ✅ Nursing domain Phase 1: V3_0 schema (nurses/credentials/roster), V3_1 demo seed,
   Nest `NursingModule` with RBAC-guarded CRUD (`/api/v1/nursing/*`), double-booking
   prevention (409), audit logging, unit tests
