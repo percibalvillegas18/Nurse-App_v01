@@ -1,0 +1,394 @@
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
+
+@Injectable()
+export class RedisService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
+  private client: Redis;
+  private isConnected = false;
+
+  constructor(private configService: ConfigService) {
+    const host = configService.get('REDIS_HOST', 'localhost');
+    const port = parseInt(configService.get('REDIS_PORT', '6379'), 10);
+    const password = configService.get('REDIS_PASSWORD');
+    const db = parseInt(configService.get('REDIS_DB', '0'), 10);
+
+    this.client = new Redis({
+      host,
+      port,
+      password: password || undefined,
+      db,
+      retryStrategy: (times) => {
+        if (times > 10) {
+          this.logger.error('Redis retry limit exceeded, giving up');
+          return null;
+        }
+        const delay = Math.min(times * 50, 2000);
+        return delay;
+      },
+      maxRetriesPerRequest: 3,
+      lazyConnect: true,
+    });
+
+    this.client.on('connect', () => {
+      this.logger.log('🔌 Redis connecting...');
+    });
+
+    this.client.on('ready', () => {
+      this.isConnected = true;
+      this.logger.log('✅ Redis connected and ready');
+    });
+
+    this.client.on('error', (err) => {
+      this.logger.error(`Redis error: ${err.message}`);
+      this.isConnected = false;
+    });
+
+    this.client.on('close', () => {
+      this.isConnected = false;
+      this.logger.warn('Redis connection closed');
+    });
+  }
+
+  async onModuleInit() {
+    try {
+      await this.client.connect();
+    } catch (error) {
+      this.logger.warn(`Redis connection failed, caching disabled: ${error.message}`);
+      this.isConnected = false;
+    }
+  }
+
+  async onModuleDestroy() {
+    try {
+      await this.client.quit();
+    } catch (error) {
+      this.logger.warn(`Error closing Redis: ${error.message}`);
+    }
+  }
+
+  getClient(): Redis {
+    return this.client;
+  }
+
+  isReady(): boolean {
+    return this.isConnected;
+  }
+
+  // ========================================================================
+  // Generic cache methods
+  // ========================================================================
+
+  async get<T>(key: string): Promise<T | null> {
+    if (!this.isReady()) return null;
+    try {
+      const value = await this.client.get(key);
+      if (!value) return null;
+      return JSON.parse(value) as T;
+    } catch (error) {
+      this.logger.warn(`Redis GET failed for ${key}: ${error.message}`);
+      return null;
+    }
+  }
+
+  async set(key: string, value: any, ttlSeconds: number): Promise<boolean> {
+    if (!this.isReady()) return false;
+    try {
+      const serialized = JSON.stringify(value);
+      if (ttlSeconds > 0) {
+        await this.client.setex(key, ttlSeconds, serialized);
+      } else {
+        await this.client.set(key, serialized);
+      }
+      return true;
+    } catch (error) {
+      this.logger.warn(`Redis SET failed for ${key}: ${error.message}`);
+      return false;
+    }
+  }
+
+  async del(key: string): Promise<boolean> {
+    if (!this.isReady()) return false;
+    try {
+      await this.client.del(key);
+      return true;
+    } catch (error) {
+      this.logger.warn(`Redis DEL failed for ${key}: ${error.message}`);
+      return false;
+    }
+  }
+
+  async delPattern(pattern: string): Promise<number> {
+    if (!this.isReady()) return 0;
+    try {
+      let cursor = '0';
+      let deleted = 0;
+      do {
+        const [nextCursor, keys] = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.client.del(...keys);
+          deleted += keys.length;
+        }
+      } while (cursor !== '0');
+      return deleted;
+    } catch (error) {
+      this.logger.warn(`Redis delPattern failed for ${pattern}: ${error.message}`);
+      return 0;
+    }
+  }
+
+  async exists(key: string): Promise<boolean> {
+    if (!this.isReady()) return false;
+    try {
+      const result = await this.client.exists(key);
+      return result === 1;
+    } catch {
+      return false;
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    if (!this.isReady()) return -1;
+    try {
+      return await this.client.ttl(key);
+    } catch {
+      return -1;
+    }
+  }
+
+  // ========================================================================
+  // RBAC-specific cache keys
+  // ========================================================================
+
+  /**
+   * Key for evaluate_access cache
+   * Format: rbac:access:{userId}:{menuCode}:{permissionCode}:{resourceId|_}
+   * Example: rbac:access:1:NURSE_MASTER:VIEW:_
+   *          rbac:access:1:NURSE_MASTER:EDIT:42
+   */
+  buildAccessKey(userId: number, menuCode: string, permissionCode: string, resourceId?: number | null): string {
+    const res = resourceId ? String(resourceId) : '_';
+    return `rbac:access:${userId}:${menuCode}:${permissionCode}:${res}`;
+  }
+
+  /**
+   * Key for full access matrix
+   * Format: rbac:full:{userId}
+   */
+  buildFullAccessKey(userId: number): string {
+    return `rbac:full:${userId}`;
+  }
+
+  /**
+   * Key for accessible menus
+   * Format: rbac:menus:{userId}
+   */
+  buildMenusKey(userId: number): string {
+    return `rbac:menus:${userId}`;
+  }
+
+  /**
+   * Key for role-based invalidation tracking
+   * Format: rbac:role:{roleCode}:users -> Set of userIds that have this role
+   */
+  buildRoleUsersKey(roleCode: string): string {
+    return `rbac:role:${roleCode}:users`;
+  }
+
+  // ========================================================================
+  // RBAC cache operations
+  // ========================================================================
+
+  async getAccessDecision<T>(userId: number, menuCode: string, permissionCode: string, resourceId?: number | null): Promise<T | null> {
+    const key = this.buildAccessKey(userId, menuCode, permissionCode, resourceId);
+    return this.get<T>(key);
+  }
+
+  async setAccessDecision(userId: number, menuCode: string, permissionCode: string, resourceId: number | null | undefined, decision: any, ttl: number): Promise<boolean> {
+    const key = this.buildAccessKey(userId, menuCode, permissionCode, resourceId);
+    const result = await this.set(key, decision, ttl);
+    if (result) {
+      this.logger.debug(`Cached access decision ${key} TTL=${ttl}s decision=${decision.decision}`);
+    }
+    return result;
+  }
+
+  async getFullAccess<T>(userId: number): Promise<T | null> {
+    return this.get<T>(this.buildFullAccessKey(userId));
+  }
+
+  async setFullAccess(userId: number, data: any, ttl = 300): Promise<boolean> {
+    return this.set(this.buildFullAccessKey(userId), data, ttl);
+  }
+
+  async getAccessibleMenus<T>(userId: number): Promise<T | null> {
+    return this.get<T>(this.buildMenusKey(userId));
+  }
+
+  async setAccessibleMenus(userId: number, menus: any, ttl = 300): Promise<boolean> {
+    return this.set(this.buildMenusKey(userId), menus, ttl);
+  }
+
+  // ========================================================================
+  // Invalidation strategies
+  // ========================================================================
+
+  /**
+   * Invalidate all cache for a specific user
+   * Called when: user role assignment changes, data scope changes, user status changes
+   */
+  async invalidateUserCache(userId: number): Promise<number> {
+    this.logger.log(`Invalidating cache for user ${userId}`);
+    const patterns = [
+      `rbac:access:${userId}:*`,
+      `rbac:full:${userId}`,
+      `rbac:menus:${userId}`,
+    ];
+
+    let totalDeleted = 0;
+    for (const pattern of patterns) {
+      const deleted = await this.delPattern(pattern);
+      totalDeleted += deleted;
+    }
+
+    this.logger.log(`Invalidated ${totalDeleted} keys for user ${userId}`);
+    return totalDeleted;
+  }
+
+  /**
+   * Invalidate cache for all users having a specific role
+   * Called when: role_menu_access or role_permissions changes for a role
+   */
+  async invalidateRoleCache(roleCode: string): Promise<number> {
+    this.logger.log(`Invalidating cache for role ${roleCode}`);
+
+    // First, try to get users with this role from cache tracking
+    // If not tracked, fallback to pattern deletion for all users (more expensive)
+    // For now, we delete all access keys that might be affected by this role
+    // This is O(N) but acceptable for RBAC config changes which are infrequent
+
+    // Pattern to delete all access decisions (since we don't know which users have this role without DB query)
+    // In production, you would query DB for users with this role and invalidate only them
+    // Here we implement both: try role tracking, fallback to full scan if needed
+
+    let totalDeleted = 0;
+
+    // Delete all full and menus cache (since role change affects them)
+    // We need to delete for all users - scan all rbac:full:* and rbac:menus:*
+    // But we can optimize by only deleting if we have role->users mapping
+
+    // Attempt to get tracked users for this role
+    const roleUsersKey = this.buildRoleUsersKey(roleCode);
+    const trackedUserIds = await this.get<number[]>(roleUsersKey);
+
+    if (trackedUserIds && trackedUserIds.length > 0) {
+      // Precise invalidation
+      for (const userId of trackedUserIds) {
+        const deleted = await this.invalidateUserCache(userId);
+        totalDeleted += deleted;
+      }
+      this.logger.log(`Precise invalidation for role ${roleCode}: ${trackedUserIds.length} users, ${totalDeleted} keys`);
+    } else {
+      // Fallback: invalidate all RBAC cache (safe but expensive)
+      // Only do this for role config changes which are rare and critical
+      this.logger.warn(`No tracked users for role ${roleCode}, falling back to full RBAC cache invalidation`);
+      const patterns = [
+        `rbac:access:*`,
+        `rbac:full:*`,
+        `rbac:menus:*`,
+      ];
+      for (const pattern of patterns) {
+        const deleted = await this.delPattern(pattern);
+        totalDeleted += deleted;
+      }
+      this.logger.log(`Full invalidation for role ${roleCode}: ${totalDeleted} keys deleted`);
+    }
+
+    return totalDeleted;
+  }
+
+  /**
+   * Track which users have which roles (for precise invalidation)
+   * Call this when user role assignment changes
+   */
+  async trackUserRoles(userId: number, roleCodes: string[]): Promise<void> {
+    if (!this.isReady()) return;
+
+    // For each role, add userId to role's user set
+    for (const roleCode of roleCodes) {
+      const key = this.buildRoleUsersKey(roleCode);
+      try {
+        // Use Set via JSON array for simplicity (could use Redis SET for better performance)
+        let userIds = await this.get<number[]>(key);
+        if (!userIds) userIds = [];
+        if (!userIds.includes(userId)) {
+          userIds.push(userId);
+          await this.set(key, userIds, 3600); // 1h tracking TTL
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to track user ${userId} for role ${roleCode}: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Invalidate all RBAC cache (nuclear option)
+   * Called when: major RBAC reconfiguration, deployment, etc.
+   */
+  async invalidateAllRbacCache(): Promise<number> {
+    this.logger.warn('Invalidating ALL RBAC cache (nuclear)');
+    const patterns = [
+      `rbac:access:*`,
+      `rbac:full:*`,
+      `rbac:menus:*`,
+      `rbac:role:*:users`,
+    ];
+
+    let totalDeleted = 0;
+    for (const pattern of patterns) {
+      const deleted = await this.delPattern(pattern);
+      totalDeleted += deleted;
+    }
+
+    this.logger.warn(`Nuclear invalidation: ${totalDeleted} keys deleted`);
+    return totalDeleted;
+  }
+
+  // ========================================================================
+  // Session caching (for auth)
+  // ========================================================================
+
+  async setSession(sessionId: string, data: any, ttl = 3600): Promise<boolean> {
+    return this.set(`session:${sessionId}`, data, ttl);
+  }
+
+  async getSession<T>(sessionId: string): Promise<T | null> {
+    return this.get<T>(`session:${sessionId}`);
+  }
+
+  async delSession(sessionId: string): Promise<boolean> {
+    return this.del(`session:${sessionId}`);
+  }
+
+  // ========================================================================
+  // Metrics
+  // ========================================================================
+
+  async getCacheStats(): Promise<{ keys: number; memory: string }> {
+    if (!this.isReady()) {
+      return { keys: 0, memory: 'N/A - Redis not connected' };
+    }
+    try {
+      const info = await this.client.info('memory');
+      const dbSize = await this.client.dbsize();
+      return {
+        keys: dbSize,
+        memory: info,
+      };
+    } catch (error) {
+      return { keys: 0, memory: `Error: ${error.message}` };
+    }
+  }
+}
