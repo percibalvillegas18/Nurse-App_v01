@@ -144,6 +144,15 @@ WHERE role_code = ANY(v_all_role_codes)
 - Load testing
 
 ## Done Recently
+- ✅ User Management (Administration): real page replacing the TODO stub.
+  Nest `UsersModule` (list/get/lookups + create/edit + deactivate/reactivate +
+  admin-set password reset + per-user unlock + sessions & login history,
+  RBAC `USER_MANAGEMENT`, audit trail USER_CREATED/UPDATED/DEACTIVATED/
+  REACTIVATED/PASSWORD_RESET/UNLOCKED, 9 unit tests). Mock-server parity:
+  per-user passwords, suspended users can't log in, login-history/sessions
+  endpoints. Per user spec: standard fields only (no schema change),
+  primary + additional roles, unlock clears per-user counters only
+  (GLOBAL lockout counter unchanged)
 - ✅ Test preview = mock server (decision: option A). The arena test server runs
   `backend/mock-server.js` (in-memory, no Postgres) + Vite frontend; no real DB
   is connected. Note: sandbox snapshots exclude `node_modules` — if the preview

@@ -292,3 +292,73 @@ export interface RosterListParams {
   nurseId?: number;
   status?: string;
 }
+
+// ---------------------------------------------------------------------------
+// User Management (Administration -> User Management)
+// ---------------------------------------------------------------------------
+export interface ManagedRole {
+  id: number;
+  code: string;
+  name: string;
+  category: string | null;
+}
+
+export interface ManagedUser {
+  id: number;
+  username: string;
+  email: string;
+  fullName: string;
+  status: 'Active' | 'Suspended';
+  emailVerified: boolean;
+  lastLoginAt: string | null;
+  lastPasswordChangeAt: string | null;
+  failedLoginAttempts: number;
+  lockedUntil: string | null;
+  primaryRole: ManagedRole | null;
+  roles: ManagedRole[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserListParams {
+  search?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface UserLookups {
+  roles: ManagedRole[];
+  statuses: string[];
+}
+
+export interface LoginHistoryItem {
+  id: number;
+  action: string;
+  status: string;
+  description: string | null;
+  errorMessage?: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+}
+
+export interface UserSession {
+  id: string;
+  ipAddress: string;
+  userAgent: string | null;
+  loginAt: string;
+  lastActivityAt: string;
+  expiresAt: string;
+  status: string;
+  revokedAt: string | null;
+}
+
+export interface CreateUserPayload {
+  username: string;
+  email: string;
+  full_name: string;
+  password: string;
+  primary_role_id: number;
+  role_ids?: number[];
+  status?: string;
+}

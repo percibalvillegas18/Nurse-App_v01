@@ -148,6 +148,13 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
         };
       },
       findMany: async () => this.mockData.users,
+      count: async () => this.mockData.users.length,
+      create: async (args: any) => {
+        const id = (this.mockData.users[this.mockData.users.length - 1]?.id ?? 0) + 1;
+        const row = { id, status: 'Active', failed_login_attempts: 0, ...args.data };
+        this.mockData.users.push(row);
+        return row;
+      },
       update: async (args: any) => {
         const idx = this.mockData.users.findIndex((u) => u.id === args.where.id);
         if (idx === -1) return null;
@@ -163,6 +170,8 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     if (client) return client.auth_user_role_assignments;
     return {
       findMany: async () => [{ role: { code: 'SYSTEM_ADMIN' } }],
+      deleteMany: async () => ({ count: 0 }),
+      create: async (args: any) => ({ id: 1, ...args.data }),
       upsert: async (args: any) => ({ id: 1, ...args.create }),
     };
   }
@@ -172,6 +181,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     if (client) return client.auth_sessions;
     return {
       create: async (args: any) => ({ id: args.data.id, ...args.data }),
+      findMany: async () => [],
       updateMany: async () => ({ count: 1 }),
     };
   }

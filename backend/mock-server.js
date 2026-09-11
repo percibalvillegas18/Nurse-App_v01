@@ -280,6 +280,52 @@ const mockTokens = {
   sessionId: 'sess_mock_123',
 };
 
+// ---------------------------------------------------------------------------
+// USER MANAGEMENT (Administration -> User Management) - mirrors Nest UsersModule
+// ---------------------------------------------------------------------------
+const MOCK_USER_ROLES = [
+  { id: 1, code: 'RN', name: 'Registered Nurse', category: 'Clinical' },
+  { id: 2, code: 'LPN', name: 'Licensed Practical Nurse', category: 'Clinical' },
+  { id: 3, code: 'CNA', name: 'Certified Nursing Assistant', category: 'Clinical' },
+  { id: 4, code: 'CHARGE_NURSE', name: 'Charge Nurse', category: 'Clinical' },
+  { id: 5, code: 'NURSE_MANAGER', name: 'Nurse Manager', category: 'Administrative' },
+  { id: 6, code: 'SCHEDULER', name: 'Workforce Scheduler', category: 'Administrative' },
+  { id: 7, code: 'HR_ADMIN', name: 'HR Administrator', category: 'Administrative' },
+  { id: 8, code: 'COMPLIANCE_OFFICER', name: 'Compliance Officer', category: 'Administrative' },
+  { id: 9, code: 'SYSTEM_ADMIN', name: 'System Administrator', category: 'System' },
+];
+// Per-user passwords (admin-set via create form / reset dialog); default below
+const mockPasswords = {};
+const DEFAULT_MOCK_PASSWORD = 'Password123!';
+// Bounded log of login events for the "Login History" drawer
+const mockLoginEvents = []; // {userId, username, action, at, ip}
+function recordLoginEvent(user, action) {
+  mockLoginEvents.push({ userId: user.id, username: user.username, action, at: new Date().toISOString(), ip: '127.0.0.1' });
+  if (mockLoginEvents.length > 200) mockLoginEvents.shift();
+}
+function findManagedUser(id) {
+  return Object.values(mockUsers).find((u) => u.id === id) || null;
+}
+function mapManagedUser(u) {
+  const attempts = loginAttempts[u.username] || { count: 0, lockedUntil: null };
+  return {
+    id: u.id,
+    username: u.username,
+    email: u.email,
+    fullName: u.fullName || u.full_name,
+    status: u.status || 'Active',
+    emailVerified: true,
+    lastLoginAt: u.lastLoginAt || null,
+    failedLoginAttempts: attempts.count || 0,
+    lockedUntil: attempts.lockedUntil ? new Date(attempts.lockedUntil).toISOString() : null,
+    primaryRole: { id: u.primary_role_id, code: u.role, name: u.roleName, category: (u.primary_role || {}).category || null },
+    roles: u.roles || [],
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+
 // Routes
 app.get('/', (req, res) => {
   res.send(`
@@ -456,7 +502,19 @@ app.post('/api/v1/auth/login', (req, res) => {
   }
 
   // Validate password - must be Password123!
-  if (password !== 'Password123!') {
+  if (user.status && user.status !== 'Active') {
+    return res.status(403).json({
+      success: false,
+      statusCode: 403,
+      errorCode: 'ACCOUNT_SUSPENDED',
+      message: `Account "${user.username}" is suspended. Contact your administrator.`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  const expectedPassword = mockPasswords[user.username] || DEFAULT_MOCK_PASSWORD;
+  if (password !== expectedPassword) {
+    recordLoginEvent(user, 'LOGIN_FAILED');
     // GLOBAL counter
     globalAttempts.count += 1;
     globalAttempts.lastAttemptAt = new Date().toISOString();
@@ -527,6 +585,7 @@ app.post('/api/v1/auth/login', (req, res) => {
   record.lockedUntil = null;
   record.lastAttemptAt = new Date().toISOString();
 
+  recordLoginEvent(user, 'LOGIN_SUCCESS');
   console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}, GLOBAL counter reset`);
   lastLoggedInUser = user;
 
@@ -658,6 +717,168 @@ app.post('/api/v1/auth/refresh-token', (req, res) => {
     message: 'Token refreshed (MOCK)',
     timestamp: new Date().toISOString(),
   });
+});
+
+// -----------------------------------------------------------------------
+// USER MANAGEMENT endpoints (menu USER_MANAGEMENT; Administration -> User Management)
+// -----------------------------------------------------------------------
+app.get('/api/v1/users/lookups', (req, res) => {
+  res.json({
+    success: true,
+    data: { roles: MOCK_USER_ROLES, statuses: ['Active', 'Suspended'] },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/users', (req, res) => {
+  const { search, status, page = 1, limit = 20 } = req.query;
+  let rows = Object.values(mockUsers).map(mapManagedUser);
+  if (status) rows = rows.filter((u) => u.status === status);
+  if (search) {
+    const q = String(search).toLowerCase();
+    rows = rows.filter((u) => u.username.includes(q) || u.email.toLowerCase().includes(q) || u.fullName.toLowerCase().includes(q));
+  }
+  rows.sort((a, b) => a.username.localeCompare(b.username));
+  const pg = parseInt(page, 10) || 1, lim = Math.min(parseInt(limit, 10) || 20, 100);
+  res.json({
+    success: true,
+    data: { items: rows.slice((pg - 1) * lim, pg * lim), total: rows.length, page: pg, limit: lim },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/users/:id', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  res.json({ success: true, data: mapManagedUser(u), timestamp: new Date().toISOString() });
+});
+
+app.get('/api/v1/users/:id/login-history', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  const items = mockLoginEvents
+    .filter((e) => e.userId === u.id)
+    .slice(-25)
+    .reverse()
+    .map((e, i) => ({ id: i + 1, action: e.action, status: e.action === 'LOGIN_SUCCESS' ? 'Success' : 'Failed', description: `${e.action.replace('_', ' ')} (MOCK)`, ipAddress: e.ip, createdAt: e.at }));
+  res.json({ success: true, data: { userId: u.id, username: u.username, items }, timestamp: new Date().toISOString() });
+});
+
+app.get('/api/v1/users/:id/sessions', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  const now = Date.now();
+  res.json({
+    success: true,
+    data: {
+      userId: u.id,
+      items: [
+        { id: `sess_${u.id}_demo`, ipAddress: '192.168.10.25', userAgent: 'Chrome/140 (Windows 11)', loginAt: new Date(now - 42 * 60000).toISOString(), lastActivityAt: new Date(now - 2 * 60000).toISOString(), expiresAt: new Date(now + 18 * 60000).toISOString(), status: 'Active', revokedAt: null },
+        { id: `sess_${u.id}_old`, ipAddress: '10.20.30.40', userAgent: 'Safari/17 (iPad)', loginAt: new Date(now - 26 * 3600000).toISOString(), lastActivityAt: new Date(now - 25 * 3600000).toISOString(), expiresAt: new Date(now - 25 * 3600000).toISOString(), status: 'Expired', revokedAt: null },
+      ],
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/v1/users', (req, res) => {
+  const b = req.body || {};
+  if (!b.username || !b.email || !b.full_name || !b.password || !b.primary_role_id) {
+    return res.status(400).json({ success: false, message: 'username, email, full_name, password, primary_role_id are required' });
+  }
+  if (Object.values(mockUsers).some((u) => u.username === b.username)) {
+    return res.status(409).json({ success: false, message: `Username "${b.username}" already exists` });
+  }
+  if (Object.values(mockUsers).some((u) => u.email === b.email)) {
+    return res.status(409).json({ success: false, message: `Email "${b.email}" already exists` });
+  }
+  const primary = MOCK_USER_ROLES.find((r) => r.id === b.primary_role_id);
+  if (!primary) return res.status(400).json({ success: false, message: 'unknown primary_role_id' });
+  const id = Math.max(...Object.values(mockUsers).map((u) => u.id)) + 1;
+  const extraRoles = (b.role_ids || [])
+    .filter((rid) => rid !== b.primary_role_id)
+    .map((rid) => MOCK_USER_ROLES.find((r) => r.id === rid))
+    .filter(Boolean)
+    .map(({ id: rid, code, name }) => ({ id: rid, code, name }));
+  mockUsers[b.username] = {
+    id,
+    username: b.username,
+    email: b.email,
+    fullName: b.full_name,
+    full_name: b.full_name,
+    role: primary.code,
+    roleName: primary.name,
+    status: b.status || 'Active',
+    primary_role_id: primary.id,
+    primary_role: primary,
+    roles: [{ id: primary.id, code: primary.code, name: primary.name }, ...extraRoles],
+  };
+  mockPasswords[b.username] = b.password;
+  console.log(`[MOCK] User created: ${b.username} (${primary.code}), id=${id}`);
+  res.status(201).json({ success: true, statusCode: 201, data: mapManagedUser(mockUsers[b.username]), timestamp: new Date().toISOString() });
+});
+
+app.patch('/api/v1/users/:id', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  const b = req.body || {};
+  if (b.email !== undefined && u.email !== b.email && Object.values(mockUsers).some((x) => x.id !== u.id && x.email === b.email)) {
+    return res.status(409).json({ success: false, message: `Email "${b.email}" already exists` });
+  }
+  if (b.email !== undefined) u.email = b.email;
+  if (b.full_name !== undefined) { u.fullName = b.full_name; u.full_name = b.full_name; }
+  if (b.primary_role_id !== undefined) {
+    const primary = MOCK_USER_ROLES.find((r) => r.id === b.primary_role_id);
+    if (!primary) return res.status(400).json({ success: false, message: 'unknown primary_role_id' });
+    u.primary_role_id = primary.id; u.primary_role = primary; u.role = primary.code; u.roleName = primary.name;
+  }
+  if (b.role_ids !== undefined) {
+    u.roles = [
+      u.primary_role,
+      ...(b.role_ids || [])
+        .filter((rid) => rid !== u.primary_role_id)
+        .map((rid) => MOCK_USER_ROLES.find((r) => r.id === rid))
+        .filter(Boolean),
+    ];
+  }
+  if (b.status !== undefined) u.status = b.status;
+  console.log(`[MOCK] User updated: ${u.username}`);
+  res.json({ success: true, data: mapManagedUser(u), timestamp: new Date().toISOString() });
+});
+
+app.post('/api/v1/users/:id/status', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  const status = (req.body || {}).status;
+  if (!['Active', 'Suspended'].includes(status)) {
+    return res.status(400).json({ success: false, message: 'status must be Active or Suspended' });
+  }
+  u.status = status;
+  console.log(`[MOCK] User ${u.username} -> ${status}`);
+  res.json({ success: true, data: mapManagedUser(u), timestamp: new Date().toISOString() });
+});
+
+app.post('/api/v1/users/:id/reset-password', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  const password = (req.body || {}).password;
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ success: false, message: 'password is required (min 8 chars)' });
+  }
+  mockPasswords[u.username] = password;
+  console.log(`[MOCK] Password reset for ${u.username}`);
+  res.json({ success: true, data: { message: `Password reset for ${u.username}` }, timestamp: new Date().toISOString() });
+});
+
+app.post('/api/v1/users/:id/unlock', (req, res) => {
+  const u = findManagedUser(parseInt(req.params.id, 10));
+  if (!u) return res.status(404).json({ success: false, message: 'User not found' });
+  if (loginAttempts[u.username]) {
+    loginAttempts[u.username].count = 0;
+    loginAttempts[u.username].lockedUntil = null;
+  }
+  console.log(`[MOCK] User unlocked: ${u.username} (per-user counters cleared; GLOBAL lockout is separate)`);
+  res.json({ success: true, data: { message: `User ${u.username} unlocked (per-user counters cleared)` }, timestamp: new Date().toISOString() });
 });
 
 app.get('/api/v1/auth/me', (req, res) => {
