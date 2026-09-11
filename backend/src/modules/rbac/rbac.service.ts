@@ -1,11 +1,17 @@
 import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../auth/prisma.service';
+import { RedisService } from '../redis/redis.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class RbacService {
   private readonly logger = new Logger(RbacService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private redisService: RedisService,
+    private auditService: AuditService,
+  ) {}
 
   // Access Levels
   async getAccessLevels(filters: { status?: string; page?: number; limit?: number; search?: string }) {
@@ -46,7 +52,7 @@ export class RbacService {
     });
     if (existing) throw new ConflictException('Access level code or name already exists');
 
-    return this.prisma.rbac_access_levels.create({
+    const result = await this.prisma.rbac_access_levels.create({
       data: {
         code: data.code,
         name: data.name,
@@ -60,6 +66,21 @@ export class RbacService {
         updated_by: createdBy,
       },
     });
+
+    // Access level change affects all RBAC cache
+    await this.redisService.invalidateAllRbacCache().catch((e) => this.logger.warn(`Cache invalidation failed: ${e.message}`));
+
+    await this.auditService.log({
+      userId: createdBy,
+      action: 'CONFIGURATION_CHANGE_CREATE',
+      entityType: 'AccessLevel',
+      entityId: Number(result.id),
+      entityCode: result.code,
+      description: `Created access level ${result.code}`,
+      status: 'Success',
+    });
+
+    return result;
   }
 
   // Menus
@@ -93,20 +114,40 @@ export class RbacService {
     });
 
     if (accessibleOnly && userId) {
-      // Filter by user's accessible menus via evaluate_access or role_menu_access
+      // Try cache for accessible menus
+      const cached = await this.redisService.getAccessibleMenus<any[]>(userId);
+      if (cached) {
+        return cached;
+      }
+
+      // Filter by user's accessible menus via role_menu_access with multi-role OR logic
       const accessibleMenuIds = await this.prisma.$queryRawUnsafe<{ menu_id: number }[]>(
         `
         SELECT DISTINCT m.id as menu_id
         FROM rbac.menus m
         JOIN rbac.role_menu_access rma ON rma.menu_id = m.id
-        JOIN auth.user_role_assignments ura ON ura.role_id = (SELECT id FROM system.hospital_roles WHERE code = rma.role_code)
+        JOIN system.hospital_roles hr ON hr.code = rma.role_code
+        JOIN auth.user_role_assignments ura ON ura.role_id = hr.id
         WHERE ura.user_id = $1
           AND ura.status = 'Active'
+          AND hr.status = 'Active'
           AND rma.status = 'Active'
           AND rma.visible = true AND rma.enabled = true
           AND m.status = 'Active'
           AND (rma.effective_from IS NULL OR rma.effective_from <= NOW())
           AND (rma.effective_to IS NULL OR rma.effective_to >= NOW())
+          AND (ura.effective_from IS NULL OR ura.effective_from <= NOW())
+          AND (ura.effective_to IS NULL OR ura.effective_to >= NOW())
+        UNION
+        SELECT DISTINCT m.id as menu_id
+        FROM rbac.menus m
+        JOIN rbac.role_menu_access rma ON rma.menu_id = m.id
+        JOIN auth.users u ON u.primary_role_id = (SELECT id FROM system.hospital_roles WHERE code = rma.role_code)
+        WHERE u.id = $1
+          AND u.status = 'Active'
+          AND rma.status = 'Active'
+          AND rma.visible = true AND rma.enabled = true
+          AND m.status = 'Active'
         `,
         userId,
       );
@@ -123,7 +164,14 @@ export class RbacService {
         }));
     };
 
-    return buildTree(null);
+    const tree = buildTree(null);
+
+    // Cache hierarchy for accessibleOnly case
+    if (accessibleOnly && userId) {
+      await this.redisService.setAccessibleMenus(userId, tree, 300).catch((e) => this.logger.warn(`Cache set failed: ${e.message}`));
+    }
+
+    return tree;
   }
 
   // Permissions
@@ -162,7 +210,7 @@ export class RbacService {
 
     if (!existing) throw new NotFoundException('Role menu access not found');
 
-    return this.prisma.rbac_role_menu_access.update({
+    const updated = await this.prisma.rbac_role_menu_access.update({
       where: { id: existing.id },
       data: {
         visible: data.visible ?? existing.visible,
@@ -172,6 +220,32 @@ export class RbacService {
         updated_by: updatedBy,
       },
     });
+
+    // CRITICAL: Invalidate cache for this role
+    // This will invalidate all users having this role
+    const deleted = await this.redisService.invalidateRoleCache(roleCode).catch((e) => {
+      this.logger.warn(`Cache invalidation failed for role ${roleCode}: ${e.message}`);
+      return 0;
+    });
+
+    this.logger.log(`Role ${roleCode} menu ${menuId} updated, invalidated ${deleted} cache keys`);
+
+    await this.auditService.log({
+      userId: updatedBy,
+      action: 'CONFIGURATION_CHANGE_UPDATE',
+      entityType: 'RoleMenuAccess',
+      entityId: Number(updated.id),
+      entityCode: `${roleCode}:${menuId}`,
+      description: `Updated menu access for role ${roleCode} menu ${menuId}: visible=${updated.visible} enabled=${updated.enabled} reason=${data.overrideReason}`,
+      changes: {
+        before: existing,
+        after: updated,
+        reason: data.overrideReason,
+      },
+      status: 'Success',
+    });
+
+    return updated;
   }
 
   // Role Permissions
@@ -199,9 +273,10 @@ export class RbacService {
       },
     });
 
+    let result;
     if (!existing) {
       // Create if not exists (grant new permission)
-      return this.prisma.rbac_role_permissions.create({
+      result = await this.prisma.rbac_role_permissions.create({
         data: {
           role_code: roleCode,
           menu_id: menuId,
@@ -214,17 +289,42 @@ export class RbacService {
           updated_by: updatedBy,
         },
       });
+    } else {
+      result = await this.prisma.rbac_role_permissions.update({
+        where: { id: existing.id },
+        data: {
+          allowed: data.allowed,
+          source: 'ManualOverride',
+          override_flag: true,
+          updated_by: updatedBy,
+        },
+      });
     }
 
-    return this.prisma.rbac_role_permissions.update({
-      where: { id: existing.id },
-      data: {
-        allowed: data.allowed,
-        source: 'ManualOverride',
-        override_flag: true,
-        updated_by: updatedBy,
-      },
+    // CRITICAL: Invalidate cache for this role
+    const deleted = await this.redisService.invalidateRoleCache(roleCode).catch((e) => {
+      this.logger.warn(`Cache invalidation failed for role ${roleCode}: ${e.message}`);
+      return 0;
     });
+
+    this.logger.log(`Role ${roleCode} permission ${permissionId} on menu ${menuId} updated to ${data.allowed}, invalidated ${deleted} cache keys`);
+
+    await this.auditService.log({
+      userId: updatedBy,
+      action: data.allowed ? 'PERMISSION_GRANTED' : 'PERMISSION_REVOKED',
+      entityType: 'RolePermission',
+      entityId: Number(result.id),
+      entityCode: `${roleCode}:${menuId}:${permissionId}`,
+      description: `${data.allowed ? 'Granted' : 'Revoked'} permission ${permissionId} for role ${roleCode} on menu ${menuId}: ${data.overrideReason}`,
+      changes: {
+        before: existing,
+        after: result,
+        reason: data.overrideReason,
+      },
+      status: 'Success',
+    });
+
+    return result;
   }
 
   // User Data Scopes
@@ -256,7 +356,7 @@ export class RbacService {
     },
     createdBy: number,
   ) {
-    return this.prisma.rbac_user_data_scopes.create({
+    const result = await this.prisma.rbac_user_data_scopes.create({
       data: {
         user_id: userId,
         scope_type: data.scopeType as any,
@@ -272,5 +372,106 @@ export class RbacService {
         updated_by: createdBy,
       },
     });
+
+    // Data scope change invalidates user cache
+    await this.redisService.invalidateUserCache(userId).catch((e) => this.logger.warn(`Cache invalidation failed for user ${userId}: ${e.message}`));
+
+    await this.auditService.log({
+      userId: createdBy,
+      action: 'CONFIGURATION_CHANGE_CREATE',
+      entityType: 'UserDataScope',
+      entityId: Number(result.id),
+      entityCode: `${userId}:${data.scopeType}`,
+      description: `Assigned data scope ${data.scopeType} to user ${userId}: ${data.reason}`,
+      status: 'Success',
+    });
+
+    return result;
+  }
+
+  async removeDataScope(scopeId: number, userId: number, removedBy: number, reason?: string) {
+    const existing = await this.prisma.rbac_user_data_scopes.findUnique({ where: { id: scopeId } });
+    if (!existing) throw new NotFoundException('Data scope not found');
+
+    const result = await this.prisma.rbac_user_data_scopes.update({
+      where: { id: scopeId },
+      data: { status: 'Inactive', updated_by: removedBy },
+    });
+
+    await this.redisService.invalidateUserCache(userId).catch((e) => this.logger.warn(`Cache invalidation failed: ${e.message}`));
+
+    await this.auditService.log({
+      userId: removedBy,
+      action: 'CONFIGURATION_CHANGE_DELETE',
+      entityType: 'UserDataScope',
+      entityId: scopeId,
+      description: `Removed data scope ${scopeId} from user ${userId}: ${reason}`,
+      status: 'Success',
+    });
+
+    return result;
+  }
+
+  // User Role Assignments with cache invalidation
+  async assignRoleToUser(
+    userId: number,
+    roleCode: string,
+    assignedBy: number,
+    reason: string,
+    effectiveFrom?: Date,
+    effectiveTo?: Date,
+  ) {
+    const role = await this.prisma.system_hospital_roles.findUnique({ where: { code: roleCode } });
+    if (!role) throw new NotFoundException(`Role ${roleCode} not found`);
+
+    const assignment = await this.prisma.auth_user_role_assignments.upsert({
+      where: { user_id_role_id: { user_id: userId, role_id: role.id } },
+      update: {
+        status: 'Active',
+        reason,
+        effective_from: effectiveFrom,
+        effective_to: effectiveTo,
+      },
+      create: {
+        user_id: userId,
+        role_id: role.id,
+        assigned_by: assignedBy,
+        reason,
+        effective_from: effectiveFrom,
+        effective_to: effectiveTo,
+        status: 'Active',
+      },
+    });
+
+    // Invalidate user cache - role assignment changed
+    await this.redisService.invalidateUserCache(userId).catch((e) => this.logger.warn(`Cache invalidation failed: ${e.message}`));
+
+    // Track new role
+    const roles = await this.prisma.auth_user_role_assignments.findMany({
+      where: { user_id: userId, status: 'Active' },
+      include: { role: true },
+    });
+    const roleCodes = roles.map((r) => r.role.code);
+    await this.redisService.trackUserRoles(userId, roleCodes).catch(() => {});
+
+    await this.auditService.log({
+      userId: assignedBy,
+      action: 'ROLE_CHANGED',
+      entityType: 'UserRoleAssignment',
+      entityId: Number(assignment.id),
+      entityCode: `${userId}:${roleCode}`,
+      description: `Assigned role ${roleCode} to user ${userId}: ${reason}`,
+      status: 'Success',
+    });
+
+    return assignment;
+  }
+
+  async getCacheStats() {
+    return this.redisService.getCacheStats();
+  }
+
+  async invalidateAllCache() {
+    return this.redisService.invalidateAllRbacCache();
   }
 }

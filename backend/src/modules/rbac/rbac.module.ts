@@ -4,9 +4,10 @@ import { RbacService } from './rbac.service';
 import { EffectiveAccessService } from './effective-access.service';
 import { PrismaService } from '../auth/prisma.service';
 import { AuditModule } from '../audit/audit.module';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, RedisModule],
   controllers: [RbacController],
   providers: [RbacService, EffectiveAccessService, PrismaService],
   exports: [RbacService, EffectiveAccessService],

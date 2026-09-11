@@ -133,6 +133,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         children: [
           { key: '/admin/users', label: 'User Management' },
           { key: '/admin/rbac', label: 'Roles & Permissions' },
+          { key: '/admin/effective-access', label: 'Effective Access' },
+          { key: '/admin/cache', label: 'Cache Stats (Redis)' },
           { key: '/admin/access-levels', label: 'Access Levels' },
           { key: '/admin/menus', label: 'Menu Master' },
           { key: '/admin/audit', label: 'Audit Logs' },

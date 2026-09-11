@@ -13,6 +13,7 @@ import { Roster } from './pages/Roster';
 import { Roles } from './pages/RBAC/Roles';
 import { EffectiveAccessPage } from './pages/RBAC/EffectiveAccess';
 import { AuditLogs } from './pages/RBAC/AuditLogs';
+import { CacheStats } from './pages/RBAC/CacheStats';
 import { NotFound, Forbidden } from './pages/NotFound';
 
 const queryClient = new QueryClient({
@@ -113,6 +114,17 @@ const App: React.FC = () => {
                     <ProtectedRoute menuCode="AUDIT_LOGS" permissionCode="VIEW">
                       <AppLayout>
                         <AuditLogs />
+                      </AppLayout>
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/admin/cache"
+                  element={
+                    <ProtectedRoute menuCode="SYSTEM_SETTINGS" permissionCode="VIEW">
+                      <AppLayout>
+                        <CacheStats />
                       </AppLayout>
                     </ProtectedRoute>
                   }

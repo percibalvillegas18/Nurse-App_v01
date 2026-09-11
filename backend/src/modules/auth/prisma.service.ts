@@ -17,22 +17,32 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit() {
-    await this.$connect();
-    this.logger.log('✅ Prisma connected to database');
+    try {
+      await this.$connect();
+      this.logger.log('✅ Prisma connected to database');
+    } catch (error) {
+      this.logger.warn(`⚠️ Prisma connection failed, running without DB (for preview): ${error.message}`);
+      // Don't throw - allow app to start for frontend preview
+      return;
+    }
 
     // Optional: Log slow queries in dev
     if (process.env.NODE_ENV === 'development') {
-      // @ts-ignore - prisma event typing
-      this.$on('query' as any, (e: any) => {
-        if (e.duration > 100) {
-          this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`);
-        }
-      });
+      try {
+        // @ts-ignore - prisma event typing
+        this.$on('query' as any, (e: any) => {
+          if (e.duration > 100) {
+            this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`);
+          }
+        });
+      } catch {}
     }
   }
 
   async onModuleDestroy() {
-    await this.$disconnect();
+    try {
+      await this.$disconnect();
+    } catch {}
   }
 
   /**
