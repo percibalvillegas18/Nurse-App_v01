@@ -293,6 +293,7 @@ const MOCK_USER_ROLES = [
   { id: 7, code: 'HR_ADMIN', name: 'HR Administrator', category: 'Administrative' },
   { id: 8, code: 'COMPLIANCE_OFFICER', name: 'Compliance Officer', category: 'Administrative' },
   { id: 9, code: 'SYSTEM_ADMIN', name: 'System Administrator', category: 'System' },
+  { id: 10, code: 'READONLY_USER', name: 'Read-Only User', category: 'System' },
 ];
 // Per-user passwords (admin-set via create form / reset dialog); default below
 const mockPasswords = {};
