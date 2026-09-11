@@ -59,11 +59,14 @@ export class AuthService {
       );
     }
 
-    // Check lockout - specific message
+    // Check lockout - 5 attempts -> 10 min lock (user requested)
     if (user.locked_until && user.locked_until > new Date()) {
       const unlockTime = user.locked_until.toISOString();
+      const remainingMs = user.locked_until.getTime() - Date.now();
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      const remainingMin = Math.ceil(remainingMs / 60000);
       throw new ForbiddenException(
-        `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime}. Please try again after 15 minutes or contact administrator.`,
+        `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime} (${remainingMin} min / ${remainingSec}s left). Please wait 10 minutes or contact administrator. Attempts: ${user.failed_login_attempts}/5`,
       );
     }
 
@@ -76,12 +79,14 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordValid) {
-      // Increment failed attempts
+      // Increment failed attempts - 5 attempts -> 10 min lock
       const failedAttempts = user.failed_login_attempts + 1;
       let lockedUntil = null;
+      const MAX_ATTEMPTS = 5;
+      const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes as requested by user
 
-      if (failedAttempts >= 5) {
-        lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 min lock
+      if (failedAttempts >= MAX_ATTEMPTS) {
+        lockedUntil = new Date(Date.now() + LOCK_DURATION_MS);
       }
 
       await this.prisma.auth_users.update({
@@ -97,18 +102,18 @@ export class AuthService {
         username: user.username,
         action: 'LOGIN_FAILURE',
         entityType: 'Auth',
-        description: `Failed login attempt ${failedAttempts} for ${trimmedUsername}`,
+        description: `Failed login attempt ${failedAttempts}/${MAX_ATTEMPTS} for ${trimmedUsername}${lockedUntil ? ` - LOCKED until ${lockedUntil.toISOString()}` : ''}`,
         status: 'Failure',
       });
 
-      if (failedAttempts >= 5) {
+      if (failedAttempts >= MAX_ATTEMPTS) {
         throw new UnauthorizedException(
-          `Incorrect password for "${user.username}". Account locked after ${failedAttempts} failed attempts until ${lockedUntil?.toISOString()}. Demo password is Password123!`,
+          `Incorrect password for "${user.username}". Account locked after ${failedAttempts}/${MAX_ATTEMPTS} failed attempts. Locked for 10 minutes until ${lockedUntil?.toISOString()}. Demo password is Password123! Wait 10 min or contact admin.`,
         );
       }
 
       throw new UnauthorizedException(
-        `Incorrect password for user "${user.username}" (attempt ${failedAttempts}/5). Password must be Password123! for demo accounts. Hint: capital P, 123, ! at end. Check Caps Lock.`,
+        `Incorrect password for "${user.username}" (attempt ${failedAttempts}/${MAX_ATTEMPTS}). ${MAX_ATTEMPTS - failedAttempts} attempts left before 10-min lock. Demo: Password123! Hint: capital P, 123, !`,
       );
     }
 

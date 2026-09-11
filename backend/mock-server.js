@@ -158,6 +158,34 @@ const mockUsers = {
 // Track last logged in user for /me endpoint
 let lastLoggedInUser = mockUsers['admin.system'];
 
+// --- LOGIN ATTEMPT COUNTER (5 attempts -> 10 min lock) ---
+const MAX_ATTEMPTS = 5;
+const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes as requested
+const loginAttempts = {}; // username -> { count, lockedUntil, lastAttemptAt }
+
+function getAttemptRecord(username) {
+  if (!loginAttempts[username]) {
+    loginAttempts[username] = { count: 0, lockedUntil: null, lastAttemptAt: null };
+  }
+  return loginAttempts[username];
+}
+
+function isLocked(username) {
+  const record = loginAttempts[username];
+  if (!record || !record.lockedUntil) return false;
+  if (Date.now() < record.lockedUntil) return true;
+  // Lock expired, reset
+  record.count = 0;
+  record.lockedUntil = null;
+  return false;
+}
+
+function getRemainingLockTime(username) {
+  const record = loginAttempts[username];
+  if (!record || !record.lockedUntil) return 0;
+  return Math.max(0, record.lockedUntil - Date.now());
+}
+
 const mockMenus = [
   {
     id: 1,
@@ -301,21 +329,60 @@ app.post('/api/v1/auth/login', (req, res) => {
     });
   }
 
-  // Find user first - to give specific username error
   const trimmedUsername = username.trim();
+
+  // Check if account is locked due to 5 failed attempts (10 min lock)
+  if (isLocked(trimmedUsername)) {
+    const remainingMs = getRemainingLockTime(trimmedUsername);
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    const remainingMin = Math.ceil(remainingMs / 60000);
+    const record = getAttemptRecord(trimmedUsername);
+    console.log(`[MOCK] Login BLOCKED for ${trimmedUsername}: locked for ${remainingSec}s, attempts ${record.count}/${MAX_ATTEMPTS}`);
+    return res.status(423).json({
+      success: false,
+      statusCode: 423,
+      error: 'LOCKED',
+      errorCode: 'ACCOUNT_LOCKED',
+      message: `Account "${trimmedUsername}" is locked due to ${MAX_ATTEMPTS} failed attempts. Try again in ${remainingMin} minute(s) (${remainingSec}s). Locked until ${new Date(record.lockedUntil).toISOString()}`,
+      details: {
+        username: trimmedUsername,
+        failedAttempts: record.count,
+        maxAttempts: MAX_ATTEMPTS,
+        lockedUntil: new Date(record.lockedUntil).toISOString(),
+        remainingSeconds: remainingSec,
+        remainingMinutes: remainingMin,
+        retryAfter: remainingSec,
+        hint: `Wait ${remainingMin} minute(s) or contact admin. Counter resets after lock expires.`
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Find user first - to give specific username error
   const user = mockUsers[trimmedUsername] || Object.values(mockUsers).find(u => u.email.toLowerCase() === trimmedUsername.toLowerCase());
   
   if (!user) {
-    console.log(`[MOCK] Login FAILED: user ${username} not found`);
+    // For security, we still count attempts for non-existent users to prevent enumeration, but show USER_NOT_FOUND
+    const record = getAttemptRecord(trimmedUsername);
+    record.count += 1;
+    record.lastAttemptAt = new Date().toISOString();
+    if (record.count >= MAX_ATTEMPTS) {
+      record.lockedUntil = Date.now() + LOCK_DURATION_MS;
+    }
+    console.log(`[MOCK] Login FAILED: user ${username} not found, attempt ${record.count}/${MAX_ATTEMPTS}`);
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'USER_NOT_FOUND',
-      message: `Username "${trimmedUsername}" not found. Please check spelling. Valid demo accounts: ${Object.keys(mockUsers).join(', ')}`,
+      message: `Username "${trimmedUsername}" not found. Attempt ${record.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - record.count} attempts left before 10-min lock.`,
       details: {
         enteredUsername: trimmedUsername,
         validUsernames: Object.keys(mockUsers),
+        failedAttempts: record.count,
+        remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
+        maxAttempts: MAX_ATTEMPTS,
+        willLockAfter: MAX_ATTEMPTS - record.count <= 0 ? 'Next failed attempt locks for 10 minutes' : `${MAX_ATTEMPTS - record.count} more fails until lock`,
         hint: 'Username is case-sensitive. Use exact demo username like admin.system or susan.lee'
       },
       timestamp: new Date().toISOString(),
@@ -324,27 +391,65 @@ app.post('/api/v1/auth/login', (req, res) => {
 
   // Validate password - must be Password123!
   if (password !== 'Password123!') {
-    console.log(`[MOCK] Login FAILED for ${username}: invalid password`);
+    const record = getAttemptRecord(user.username);
+    record.count += 1;
+    record.lastAttemptAt = new Date().toISOString();
+    
+    if (record.count >= MAX_ATTEMPTS) {
+      record.lockedUntil = Date.now() + LOCK_DURATION_MS;
+      console.log(`[MOCK] Login FAILED for ${username}: invalid password, LOCKED after ${record.count}/${MAX_ATTEMPTS}`);
+      return res.status(423).json({
+        success: false,
+        statusCode: 423,
+        error: 'LOCKED',
+        errorCode: 'ACCOUNT_LOCKED',
+        message: `Incorrect password for "${user.username}". Account locked after ${record.count} failed attempts. Try again in 10 minutes. Locked until ${new Date(record.lockedUntil).toISOString()}`,
+        details: {
+          username: user.username,
+          failedAttempts: record.count,
+          maxAttempts: MAX_ATTEMPTS,
+          remainingAttempts: 0,
+          lockedUntil: new Date(record.lockedUntil).toISOString(),
+          remainingSeconds: 600,
+          remainingMinutes: 10,
+          retryAfter: 600,
+          hint: 'Demo password is Password123! - Wait 10 minutes or contact admin',
+          commonMistakes: ['Check Caps Lock', 'Password is case-sensitive', 'Must include ! at end']
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    console.log(`[MOCK] Login FAILED for ${username}: invalid password, attempt ${record.count}/${MAX_ATTEMPTS}`);
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'INVALID_PASSWORD',
-      message: `Incorrect password for user "${user.username}". Password must be Password123! for all demo accounts.`,
+      message: `Incorrect password for "${user.username}". Attempt ${record.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - record.count} attempts left before 10-min lock.`,
       details: {
         username: user.username,
-        hint: 'Demo password is Password123! (capital P, numbers 123, exclamation mark)',
+        failedAttempts: record.count,
+        remainingAttempts: MAX_ATTEMPTS - record.count,
+        maxAttempts: MAX_ATTEMPTS,
         enteredPasswordLength: password.length,
+        willLockAfter: `${MAX_ATTEMPTS - record.count} more fails until 10-min lock`,
+        hint: 'Demo password is Password123! (capital P, numbers 123, exclamation mark)',
         commonMistakes: ['Check Caps Lock', 'Password is case-sensitive', 'Must include ! at end']
       },
       timestamp: new Date().toISOString(),
     });
   }
 
-  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}`);
+  // SUCCESS - reset counter
+  const record = getAttemptRecord(user.username);
+  record.count = 0;
+  record.lockedUntil = null;
+  record.lastAttemptAt = new Date().toISOString();
+
+  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}, counter reset`);
   lastLoggedInUser = user;
 
-  // Generate token with user info embedded (mock JWT)
   const mockToken = `mock_jwt_${user.id}_${user.role}_${Date.now()}`;
 
   res.json({

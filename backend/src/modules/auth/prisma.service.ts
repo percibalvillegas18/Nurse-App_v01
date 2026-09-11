@@ -149,9 +149,11 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       },
       findMany: async () => this.mockData.users,
       update: async (args: any) => {
-        const user = this.mockData.users.find((u) => u.id === args.where.id);
-        if (!user) return null;
-        return { ...user, ...args.data };
+        const idx = this.mockData.users.findIndex((u) => u.id === args.where.id);
+        if (idx === -1) return null;
+        // Persist changes to mockData for attempt counter
+        this.mockData.users[idx] = { ...this.mockData.users[idx], ...args.data };
+        return this.mockData.users[idx];
       },
     };
   }
