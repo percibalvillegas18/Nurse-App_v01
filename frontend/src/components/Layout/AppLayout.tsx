@@ -13,6 +13,8 @@ import {
   KeyOutlined,
   MenuOutlined,
   BellOutlined,
+  FileTextOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
@@ -73,6 +75,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             DASHBOARD: <DashboardOutlined />,
             NURSING_WORKFORCE: <TeamOutlined />,
             NURSE_MASTER: <TeamOutlined />,
+            CONTRACT: <FileTextOutlined />,
+            DOCUMENTS: <FolderOpenOutlined />,
             SCHEDULING: <ScheduleOutlined />,
             NURSE_ROSTER: <ScheduleOutlined />,
             WORKFORCE_ANALYTICS: <BarChartOutlined />,
@@ -109,7 +113,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         children: [
           { key: '/nursing/master', label: 'Nurse Master' },
           { key: '/nursing/credentials', label: 'Credentials' },
-          { key: '/nursing/certifications', label: 'Certifications' },
+          { key: '/nursing/contract', label: 'Contract' },
+          { key: '/nursing/documents', label: 'Documents' },
+          { key: '/scheduling/roster', label: 'Nurse Roster' },
         ],
       },
       {
@@ -117,7 +123,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         icon: <ScheduleOutlined />,
         label: 'Scheduling',
         children: [
-          { key: '/scheduling/roster', label: 'Nurse Roster' },
           { key: '/scheduling/leave', label: 'Leave Management' },
         ],
       },

@@ -11,6 +11,8 @@ import { Dashboard } from './pages/Dashboard';
 import { NurseMaster } from './pages/NurseMaster';
 import { Roster } from './pages/Roster';
 import { Credentials } from './pages/Credentials';
+import { Contract } from './pages/Contract';
+import { Documents } from './pages/Documents';
 import { Roles } from './pages/RBAC/Roles';
 import { EffectiveAccessPage } from './pages/RBAC/EffectiveAccess';
 import { AuditLogs } from './pages/RBAC/AuditLogs';
@@ -138,6 +140,28 @@ const App: React.FC = () => {
                     <ProtectedRoute menuCode="CREDENTIALS" permissionCode="VIEW">
                       <AppLayout>
                         <Credentials />
+                      </AppLayout>
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/nursing/contract"
+                  element={
+                    <ProtectedRoute menuCode="CONTRACT" permissionCode="VIEW">
+                      <AppLayout>
+                        <Contract />
+                      </AppLayout>
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="/nursing/documents"
+                  element={
+                    <ProtectedRoute menuCode="DOCUMENTS" permissionCode="VIEW">
+                      <AppLayout>
+                        <Documents />
                       </AppLayout>
                     </ProtectedRoute>
                   }

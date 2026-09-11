@@ -227,7 +227,9 @@ const mockMenus = [
     children: [
       { id: 6, code: 'NURSE_MASTER', name: 'Nurse Master', route: '/nursing/master', icon: 'badge' },
       { id: 7, code: 'CREDENTIALS', name: 'Credentials', route: '/nursing/credentials', icon: 'verified' },
-      { id: 8, code: 'CERTIFICATIONS', name: 'Certifications', route: '/nursing/certifications', icon: 'certificate' },
+      { id: 19, code: 'CONTRACT', name: 'Contract', route: '/nursing/contract', icon: 'file' },
+      { id: 20, code: 'DOCUMENTS', name: 'Documents', route: '/nursing/documents', icon: 'folder' },
+      { id: 9, code: 'NURSE_ROSTER', name: 'Nurse Roster', route: '/scheduling/roster', icon: 'list' },
     ],
   },
   {
@@ -237,7 +239,6 @@ const mockMenus = [
     route: '/scheduling',
     icon: 'calendar',
     children: [
-      { id: 9, code: 'NURSE_ROSTER', name: 'Nurse Roster', route: '/scheduling/roster', icon: 'list' },
       { id: 10, code: 'LEAVE_MANAGEMENT', name: 'Leave Management', route: '/scheduling/leave', icon: 'time_off' },
     ],
   },
