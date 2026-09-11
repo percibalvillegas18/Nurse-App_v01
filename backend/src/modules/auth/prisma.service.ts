@@ -290,6 +290,43 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  get nursing_nurses() {
+    const client = this.getClient();
+    if (client) return client.nursing_nurses;
+    return {
+      findMany: async () => [],
+      findUnique: async () => null,
+      findFirst: async () => null,
+      create: async (args: any) => ({ id: 1, ...args.data }),
+      update: async (args: any) => ({ id: args.where.id, ...args.data }),
+      count: async () => 0,
+    };
+  }
+
+  get nursing_credentials() {
+    const client = this.getClient();
+    if (client) return client.nursing_credentials;
+    return {
+      findMany: async () => [],
+      findUnique: async () => null,
+      create: async (args: any) => ({ id: 1, ...args.data }),
+      update: async (args: any) => ({ id: args.where.id, ...args.data }),
+      count: async () => 0,
+    };
+  }
+
+  get nursing_roster_assignments() {
+    const client = this.getClient();
+    if (client) return client.nursing_roster_assignments;
+    return {
+      findMany: async () => [],
+      findUnique: async () => null,
+      create: async (args: any) => ({ id: 1, ...args.data }),
+      update: async (args: any) => ({ id: args.where.id, ...args.data }),
+      count: async () => 0,
+    };
+  }
+
   /**
    * Raw query - tries real DB, falls back to mock evaluate_access
    */
@@ -437,6 +474,43 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       `SELECT * FROM rbac.get_user_full_access($1)`,
       userId,
     )) as any[];
+  }
+
+  /**
+   * Whether the service is running against the real database or the in-memory mock.
+   */
+  isMockMode(): boolean {
+    return this.isMock || !this.prismaClient;
+  }
+
+  /**
+   * Real DB health check - runs SELECT 1 against the database.
+   * Returns 'ok' when the real database answers, 'mock' when the in-memory
+   * mock is in use (app is still functional for preview/demo), or 'error'
+   * when the real client exists but the query failed.
+   */
+  async healthCheck(): Promise<{
+    status: 'ok' | 'mock' | 'error';
+    mode: 'database' | 'mock';
+    latencyMs: number;
+    error?: string;
+  }> {
+    if (this.isMockMode()) {
+      return { status: 'mock', mode: 'mock', latencyMs: 0 };
+    }
+    const start = Date.now();
+    try {
+      await this.prismaClient.$queryRawUnsafe('SELECT 1');
+      return { status: 'ok', mode: 'database', latencyMs: Date.now() - start };
+    } catch (error: any) {
+      this.logger.warn(`Database health check failed: ${error.message}`);
+      return {
+        status: 'error',
+        mode: 'database',
+        latencyMs: Date.now() - start,
+        error: error.message,
+      };
+    }
   }
 
   // For transaction support (mock)

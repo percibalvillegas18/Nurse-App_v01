@@ -17,6 +17,7 @@ const order = [
   'V2_3__seed_hospital_roles_and_users.sql',
   'V2_4__seed_rbac_configuration.sql',
   'V2_5__fix_evaluate_access_multirole.sql',
+  'V3_0__nursing_domain.sql',
 ];
 
 async function run() {
