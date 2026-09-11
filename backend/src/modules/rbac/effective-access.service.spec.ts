@@ -10,12 +10,23 @@ import { EffectiveAccessService } from './effective-access.service';
 describe('EFFECTIVE ACCESS SERVICE - CRITICAL AUTHORIZATION TESTS', () => {
   let service: EffectiveAccessService;
   let mockPrisma: any;
+  let mockRedis: any;
 
   beforeAll(() => {
     mockPrisma = {
       $queryRawUnsafe: jest.fn(),
     };
-    service = new EffectiveAccessService(mockPrisma);
+    mockRedis = {
+      getAccessDecision: jest.fn().mockResolvedValue(null),
+      setAccessDecision: jest.fn().mockResolvedValue(true),
+      getFullAccess: jest.fn().mockResolvedValue(null),
+      setFullAccess: jest.fn().mockResolvedValue(true),
+      getAccessibleMenus: jest.fn().mockResolvedValue(null),
+      setAccessibleMenus: jest.fn().mockResolvedValue(true),
+      trackUserRoles: jest.fn().mockResolvedValue(undefined),
+      buildAccessKey: jest.fn().mockReturnValue('mock_key'),
+    };
+    service = new EffectiveAccessService(mockPrisma, mockRedis);
   });
 
   describe('AND-Logic: Menu AND Permission AND Data Scope', () => {

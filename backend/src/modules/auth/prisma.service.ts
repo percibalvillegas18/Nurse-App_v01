@@ -9,14 +9,28 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   // Mock data for preview when DB not available or client not generated
   private mockData = {
     users: [
-      { id: 1, username: 'admin.system', email: 'admin@hospital.local', full_name: 'System Administrator', status: 'Active', primary_role_id: 9 },
-      { id: 2, username: 'susan.lee', email: 'susan.lee@hospital.local', full_name: 'Susan Lee - Nurse Manager, ICU', status: 'Active', primary_role_id: 5 },
-      { id: 3, username: 'maria.garcia', email: 'maria.garcia@hospital.local', full_name: 'Maria Garcia - RN', status: 'Active', primary_role_id: 1 },
+      { id: 1, username: 'admin.system', email: 'admin@hospital.local', full_name: 'System Administrator', status: 'Active', primary_role_id: 9, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 2, username: 'susan.lee', email: 'susan.lee@hospital.local', full_name: 'Susan Lee - Nurse Manager, ICU', status: 'Active', primary_role_id: 5, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 3, username: 'james.wilson', email: 'james.wilson@hospital.local', full_name: 'James Wilson - Charge Nurse, ICU', status: 'Active', primary_role_id: 4, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 4, username: 'maria.garcia', email: 'maria.garcia@hospital.local', full_name: 'Maria Garcia - RN', status: 'Active', primary_role_id: 1, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 5, username: 'ahmed.hassan', email: 'ahmed.hassan@hospital.local', full_name: 'Ahmed Hassan - RN', status: 'Active', primary_role_id: 1, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 6, username: 'jennifer.smith', email: 'jennifer.smith@hospital.local', full_name: 'Jennifer Smith - LPN', status: 'Active', primary_role_id: 2, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 7, username: 'david.kim', email: 'david.kim@hospital.local', full_name: 'David Kim - CNA', status: 'Active', primary_role_id: 3, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 8, username: 'rachel.brown', email: 'rachel.brown@hospital.local', full_name: 'Rachel Brown - Scheduler', status: 'Active', primary_role_id: 6, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 9, username: 'patricia.johnson', email: 'patricia.johnson@hospital.local', full_name: 'Patricia Johnson - HR Admin', status: 'Active', primary_role_id: 7, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 10, username: 'michael.wong', email: 'michael.wong@hospital.local', full_name: 'Michael Wong - Compliance', status: 'Active', primary_role_id: 8, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
     ],
     roles: [
       { id: 1, code: 'RN', name: 'Registered Nurse' },
+      { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' },
+      { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' },
+      { id: 4, code: 'CHARGE_NURSE', name: 'Charge Nurse' },
       { id: 5, code: 'NURSE_MANAGER', name: 'Nurse Manager' },
+      { id: 6, code: 'SCHEDULER', name: 'Workforce Scheduler' },
+      { id: 7, code: 'HR_ADMIN', name: 'HR Administrator' },
+      { id: 8, code: 'COMPLIANCE_OFFICER', name: 'Compliance Officer' },
       { id: 9, code: 'SYSTEM_ADMIN', name: 'System Administrator' },
+      { id: 10, code: 'READONLY_USER', name: 'Read-Only User' },
     ],
   };
 
@@ -89,28 +103,56 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   get auth_users() {
     const client = this.getClient();
     if (client) return client.auth_users;
-    // Mock implementation
+    // Mock implementation - FIXED to properly handle different users and password validation
     return {
       findUnique: async (args: any) => {
-        const user = this.mockData.users.find((u) => u.id === args.where.id || u.username === args.where.username);
+        let user: any = null;
+        if (args.where.id) {
+          user = this.mockData.users.find((u) => u.id === args.where.id);
+        } else if (args.where.username) {
+          user = this.mockData.users.find((u) => u.username === args.where.username);
+        } else if (args.where.email) {
+          user = this.mockData.users.find((u) => u.email === args.where.email);
+        }
         if (!user) return null;
+        const role = this.mockData.roles.find((r) => r.id === user.primary_role_id);
         return {
           ...user,
-          primary_role: this.mockData.roles.find((r) => r.id === user.primary_role_id),
-          user_role_assignments: [{ role: this.mockData.roles.find((r) => r.id === user.primary_role_id) }],
+          primary_role: role,
+          user_role_assignments: [{ role }],
         };
       },
       findFirst: async (args: any) => {
-        const username = args.where?.OR?.[0]?.username || args.where?.username;
+        let username: string | undefined;
+        // Handle OR: [{username}, {email: username}]
+        if (args.where?.OR && Array.isArray(args.where.OR)) {
+          for (const cond of args.where.OR) {
+            if (cond.username) username = cond.username;
+            if (cond.email) username = cond.email;
+          }
+        } else if (args.where?.username) {
+          username = args.where.username;
+        } else if (args.where?.email) {
+          username = args.where.email;
+        }
+
+        if (!username) return null;
+
         const user = this.mockData.users.find((u) => u.username === username || u.email === username);
         if (!user) return null;
+
+        const role = this.mockData.roles.find((r) => r.id === user.primary_role_id);
         return {
           ...user,
-          primary_role: this.mockData.roles.find((r) => r.id === user.primary_role_id),
+          primary_role: role,
         };
       },
       findMany: async () => this.mockData.users,
-      update: async (args: any) => ({ ...this.mockData.users[0], ...args.data }),
+      update: async (args: any) => {
+        const user = this.mockData.users.find((u) => u.id === args.where.id);
+        if (!user) return null;
+        return { ...user, ...args.data };
+      },
     };
   }
 
