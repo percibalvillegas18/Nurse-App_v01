@@ -3,7 +3,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsInt,
-  IsEmail,
   IsDateString,
   IsIn,
   MaxLength,
@@ -75,9 +74,8 @@ export class CreateNurseDto {
   @MaxLength(100)
   nationality?: string;
 
-  @IsOptional()
-  @IsEmail()
-  email?: string;
+  // NOTE: email intentionally absent - sourced from the linked login
+  // account (auth.users.email), not entered on the nurse record.
 
   @IsOptional()
   @IsString()
@@ -142,10 +140,6 @@ export class UpdateNurseDto {
   @IsString()
   @MaxLength(100)
   nationality?: string;
-
-  @IsOptional()
-  @IsEmail()
-  email?: string;
 
   @IsOptional()
   @IsString()

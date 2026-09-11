@@ -207,6 +207,7 @@ export interface Nurse {
   gender: 'Male' | 'Female' | null;
   dateOfBirth: string | null;
   nationality: string | null;
+  /** Sourced from the linked login account (auth.users.email); read-only */
   email: string | null;
   /** Contact No. (mobile) */
   phone: string | null;

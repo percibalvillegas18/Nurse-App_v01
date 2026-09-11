@@ -20,6 +20,7 @@ const order = [
   'V3_0__nursing_domain.sql',
   'V3_1__seed_nursing_demo.sql',
   'V3_2__nurse_personal_fields.sql',
+  'V3_3__drop_nurse_email.sql',
 ];
 
 async function run() {

@@ -95,7 +95,6 @@ export const NurseMaster: React.FC = () => {
       gender: nurse.gender,
       dateOfBirth: nurse.dateOfBirth ? dayjs(nurse.dateOfBirth) : null,
       nationality: nurse.nationality,
-      email: nurse.email,
       contactNo: nurse.phone,
       primaryRoleId: nurse.primaryRole?.id,
       status: nurse.status,
@@ -112,7 +111,6 @@ export const NurseMaster: React.FC = () => {
       gender: values.gender,
       date_of_birth: values.dateOfBirth ? values.dateOfBirth.format('YYYY-MM-DD') : undefined,
       nationality: values.nationality,
-      email: values.email || undefined,
       phone: values.contactNo || undefined,
       primary_role_id: values.primaryRoleId,
     };
@@ -406,14 +404,6 @@ export const NurseMaster: React.FC = () => {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="email" label="Email Address">
-                <Input type="email" placeholder="name@hospital.local" />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Row gutter={12}>
-            <Col span={editing ? 12 : 24}>
               <Form.Item name="primaryRoleId" label="Primary Role" rules={[{ required: true, message: 'Required' }]}>
                 <Select
                   placeholder="Select role"
@@ -421,16 +411,15 @@ export const NurseMaster: React.FC = () => {
                 />
               </Form.Item>
             </Col>
-            {editing && (
-              <Col span={12}>
-                <Form.Item name="status" label="Status">
-                  <Select
-                    options={['Active', 'OnLeave', 'Suspended', 'Terminated'].map((s) => ({ value: s, label: s }))}
-                  />
-                </Form.Item>
-              </Col>
-            )}
           </Row>
+
+          {editing && (
+            <Form.Item name="status" label="Status" style={{ marginBottom: 8 }}>
+              <Select
+                options={['Active', 'OnLeave', 'Suspended', 'Terminated'].map((s) => ({ value: s, label: s }))}
+              />
+            </Form.Item>
+          )}
 
           <Alert
             type="info"
@@ -438,8 +427,8 @@ export const NurseMaster: React.FC = () => {
             style={{ marginBottom: 0 }}
             message={
               editing
-                ? `Employee #: ${editing.employeeNumber}`
-                : 'Employee # is auto-generated on save. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
+                ? `Employee #: ${editing.employeeNumber}${editing.email ? ' • Email (from user account): ' + editing.email : ''}`
+                : 'Employee # is auto-generated on save; the email address comes from the user account. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
             }
           />
         </Form>

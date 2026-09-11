@@ -42,7 +42,7 @@ class FakePrisma {
           ...n,
           primary_role: n.primary_role,
           home_unit: this.units.find((u) => u.id === n.home_unit_id) || null,
-          user: n.user_id ? { username: 'maria.garcia' } : null,
+          user: n.user_id ? { username: 'maria.garcia', email: 'maria.garcia@hospital.local' } : null,
           credentials: this.credentials.filter((c) => c.nurse_id === n.id && !c.deleted_at),
         }));
     },
@@ -55,7 +55,7 @@ class FakePrisma {
         ...n,
         primary_role: n.primary_role ?? null,
         home_unit: this.units.find((u) => u.id === n.home_unit_id) || null,
-        user: n.user_id ? { username: 'maria.garcia' } : null,
+        user: n.user_id ? { username: 'maria.garcia', email: 'maria.garcia@hospital.local' } : null,
         credentials: this.credentials.filter((c) => c.nurse_id === n.id && !c.deleted_at),
         roster_assignments: this.roster
           .filter((a) => a.nurse_id === n.id && !a.deleted_at)
@@ -89,7 +89,9 @@ class FakePrisma {
         ...data,
         primary_role: null,
         home_unit: this.units.find((u) => u.id === data.home_unit_id) || null,
-        user: null,
+        user: data.user_id
+          ? { username: 'maria.garcia', email: 'maria.garcia@hospital.local' }
+          : null,
       };
       this.nurses.push(row);
       return row;
@@ -252,6 +254,8 @@ describe('NURSING SERVICE', () => {
       expect(nurse.fullName).toBe('Maria Garcia');
       expect(nurse.homeUnit?.code).toBe('ICU_A');
       expect(nurse.credentialSummary).toBe('None');
+      // Email comes from the linked user account, not the nurse record
+      expect(nurse.email).toBe('maria.garcia@hospital.local');
       expect(audits[audits.length - 1].action).toBe('NURSE_CREATED');
     });
 

@@ -93,7 +93,7 @@ export class NursingService {
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
           home_unit: { select: { id: true, code: true, name: true } },
-          user: { select: { username: true } },
+          user: { select: { username: true, email: true } },
           credentials: {
             where: { deleted_at: null },
             select: { status: true, expiry_date: true },
@@ -128,7 +128,7 @@ export class NursingService {
       include: {
         primary_role: { select: { id: true, code: true, name: true } },
         home_unit: { select: { id: true, code: true, name: true } },
-        user: { select: { username: true } },
+        user: { select: { username: true, email: true } },
         credentials: {
           where: { deleted_at: null },
           orderBy: { expiry_date: 'asc' },
@@ -178,7 +178,6 @@ export class NursingService {
           gender: dto.gender ?? null,
           date_of_birth: dto.date_of_birth ? new Date(dto.date_of_birth) : null,
           nationality: dto.nationality ?? null,
-          email: dto.email ?? null,
           phone: dto.phone ?? null,
           hire_date: dto.hire_date ? new Date(dto.hire_date) : null,
           employment_type: dto.employment_type || 'FullTime',
@@ -190,7 +189,7 @@ export class NursingService {
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
           home_unit: { select: { id: true, code: true, name: true } },
-          user: { select: { username: true } },
+          user: { select: { username: true, email: true } },
           credentials: { where: { deleted_at: null } },
         },
       });
@@ -231,7 +230,6 @@ export class NursingService {
             date_of_birth: dto.date_of_birth ? new Date(dto.date_of_birth) : null,
           }),
           ...(dto.nationality !== undefined && { nationality: dto.nationality }),
-          ...(dto.email !== undefined && { email: dto.email }),
           ...(dto.phone !== undefined && { phone: dto.phone }),
           ...(dto.hire_date !== undefined && {
             hire_date: dto.hire_date ? new Date(dto.hire_date) : null,
@@ -245,7 +243,7 @@ export class NursingService {
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
           home_unit: { select: { id: true, code: true, name: true } },
-          user: { select: { username: true } },
+          user: { select: { username: true, email: true } },
           credentials: { where: { deleted_at: null } },
         },
       });
@@ -713,7 +711,8 @@ export class NursingService {
       gender: r.gender ?? null,
       dateOfBirth: r.date_of_birth ? this.toDateOnly(r.date_of_birth) : null,
       nationality: r.nationality ?? null,
-      email: r.email,
+      // Email is sourced from the linked login account (auth.users.email)
+      email: r.user?.email ?? null,
       phone: r.phone,
       hireDate: r.hire_date ? this.toDateOnly(r.hire_date) : null,
       employmentType: r.employment_type,

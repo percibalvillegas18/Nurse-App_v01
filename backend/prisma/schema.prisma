@@ -485,7 +485,6 @@ model nursing_nurses {
   gender          String?   @db.VarChar(50) // nursing.gender enum (Male | Female)
   date_of_birth   DateTime? @db.Date
   nationality     String?   @db.VarChar(100)
-  email           String?   @db.VarChar(255)
   phone           String?   @db.VarChar(50)
   hire_date       DateTime? @db.Date
   employment_type String    @default("FullTime") @db.VarChar(50) // nursing.employment_type enum

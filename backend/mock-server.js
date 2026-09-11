@@ -1027,10 +1027,10 @@ const COUNTRIES = [
 ];
 
 const mockNurses = [
-  { id: 1, employeeNumber: 'EMP-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', email: 'maria.garcia@hospital.local', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 2, employeeNumber: 'EMP-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', email: 'ahmed.hassan@hospital.local', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 3, employeeNumber: 'EMP-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', email: 'jennifer.smith@hospital.local', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 4, employeeNumber: 'EMP-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', email: 'david.kim@hospital.local', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 1, employeeNumber: 'EMP-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, employeeNumber: 'EMP-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, employeeNumber: 'EMP-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, employeeNumber: 'EMP-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ];
 
 const mockCredentials = [
@@ -1084,6 +1084,10 @@ function summarizeMockCredentials(nurseId) {
     credentialCounts: { total: active.length, expired, expiringSoon },
   };
 }
+function mockUserEmail(userId) {
+  const u = userId ? Object.keys(mockUsers).map((k) => mockUsers[k]).find((x) => x.id === userId) : null;
+  return u ? u.email : null;
+}
 function mapMockNurse(n) {
   return {
     id: n.id, employeeNumber: n.employeeNumber, firstName: n.firstName,
@@ -1091,7 +1095,8 @@ function mapMockNurse(n) {
     // Full Name = First + Middle + Last (middle omitted when not set)
     fullName: [n.firstName, n.middleName, n.lastName].filter(Boolean).join(' '),
     gender: n.gender || null, dateOfBirth: n.dateOfBirth || null, nationality: n.nationality || null,
-    email: n.email, phone: n.phone, hireDate: n.hireDate,
+    // Email is sourced from the linked login account (auth.users)
+    email: mockUserEmail(n.userId), phone: n.phone, hireDate: n.hireDate,
     employmentType: n.employmentType, status: n.status, userId: n.userId, username: n.username,
     primaryRole: n.primaryRole, homeUnit: n.homeUnit,
     ...summarizeMockCredentials(n.id),
@@ -1216,7 +1221,6 @@ app.post('/api/v1/nursing/nurses', (req, res) => {
     gender: b.gender || null,
     dateOfBirth: b.date_of_birth ? String(b.date_of_birth).slice(0, 10) : null,
     nationality: b.nationality || null,
-    email: b.email || null,
     phone: b.phone || null,
     hireDate: b.hire_date ? String(b.hire_date).slice(0, 10) : null,
     employmentType: b.employment_type || 'FullTime',
@@ -1249,7 +1253,6 @@ app.patch('/api/v1/nursing/nurses/:id', (req, res) => {
   if (b.gender !== undefined) nurse.gender = b.gender;
   if (b.date_of_birth !== undefined) nurse.dateOfBirth = b.date_of_birth ? String(b.date_of_birth).slice(0, 10) : null;
   if (b.nationality !== undefined) nurse.nationality = b.nationality;
-  if (b.email !== undefined) nurse.email = b.email;
   if (b.phone !== undefined) nurse.phone = b.phone;
   if (b.hire_date !== undefined) nurse.hireDate = String(b.hire_date).slice(0, 10);
   if (b.employment_type !== undefined) nurse.employmentType = b.employment_type;
