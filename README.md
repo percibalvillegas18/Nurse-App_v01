@@ -37,7 +37,8 @@ Nurse-App_v01/
 │   │   ├── V2_3__seed_hospital_roles_and_users.sql
 │   │   ├── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
 │   │   ├── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
-│   │   └── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
+│   │   ├── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
+│   │   └── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
 │   ├── scripts/run-migrations.ts
 │   ├── Dockerfile
 │   ├── package.json
@@ -86,6 +87,7 @@ psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sq
 psql $DATABASE_URL -f database/migrations/V2_4__seed_rbac_configuration.sql
 psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sql
 psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
+psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
 
 # Or use script
 npx ts-node scripts/run-migrations.ts
@@ -135,11 +137,16 @@ WHERE role_code = ANY(v_all_role_codes)
 ```
 
 ## Next Steps
-- Nursing domain APIs + UI for V3_0 tables (nurses, credentials, rosters) — schema in place, pages currently use demo data
+- Leave management + workforce analytics domains
 - MFA, RLS hardening, audit partitioning
 - Load testing
 
 ## Done Recently
+- ✅ Nursing domain Phase 1: V3_0 schema (nurses/credentials/roster), V3_1 demo seed,
+  Nest `NursingModule` with RBAC-guarded CRUD (`/api/v1/nursing/*`), double-booking
+  prevention (409), audit logging, 13 unit tests
+- ✅ Frontend wired to live data: NurseMaster (search/pagination/CRUD/drawer),
+  Credentials compliance radar, Roster calendar with day details
 - ✅ Frontend React app (React 18 + Vite + Ant Design)
 - ✅ Redis caching with per-user/per-role invalidation (see REDIS_CACHING.md)
 - ✅ Real `/health/ready` checks: DB `SELECT 1` via Prisma, Redis `PING`, 503 when DB down

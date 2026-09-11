@@ -173,3 +173,113 @@ export interface PaginatedResponse<T> {
     hasPreviousPage: boolean;
   };
 }
+
+// ============================================================================
+// Nursing domain (V3_0) - mirrors Nest /nursing API response shapes
+// ============================================================================
+
+export type CredentialSummary = 'Valid' | 'ExpiringSoon' | 'Expired' | 'None';
+export type EmploymentType = 'FullTime' | 'PartTime' | 'PRN' | 'Contract';
+export type NurseStatus = 'Active' | 'OnLeave' | 'Suspended' | 'Terminated';
+export type CredentialStatus =
+  | 'PendingVerification'
+  | 'Valid'
+  | 'ExpiringSoon'
+  | 'Expired'
+  | 'Suspended'
+  | 'Revoked';
+export type RosterStatus =
+  | 'Scheduled'
+  | 'Confirmed'
+  | 'Completed'
+  | 'Cancelled'
+  | 'Swapped'
+  | 'NoShow';
+
+export interface Nurse {
+  id: number;
+  employeeNumber: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  email: string | null;
+  phone: string | null;
+  hireDate: string | null;
+  employmentType: EmploymentType;
+  status: NurseStatus;
+  userId: number | null;
+  username: string | null;
+  primaryRole: { id: number; code: string; name: string } | null;
+  homeUnit: { id: number; code: string; name: string } | null;
+  credentialSummary: CredentialSummary;
+  credentialCounts: { total: number; expired: number; expiringSoon: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NurseCredential {
+  id: number;
+  nurseId: number;
+  credentialType: 'License' | 'Certification';
+  name: string;
+  issuingAuthority: string | null;
+  credentialNumber: string | null;
+  issuedDate: string | null;
+  expiryDate: string | null;
+  daysUntilExpiry: number | null;
+  status: CredentialStatus;
+  verifiedBy: number | null;
+  verifiedAt: string | null;
+  nurse?: { id: number; employeeNumber: string; fullName: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RosterAssignment {
+  id: number;
+  nurseId: number;
+  nurseName?: string;
+  employeeNumber?: string;
+  unitId: number;
+  unitCode?: string;
+  unitName?: string;
+  shiftId: number;
+  shiftCode?: string;
+  shiftName?: string;
+  postId: number | null;
+  postCode?: string;
+  postName?: string;
+  assignmentDate: string; // YYYY-MM-DD
+  status: RosterStatus;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NurseDetail extends Nurse {
+  credentials: NurseCredential[];
+  upcomingAssignments: RosterAssignment[];
+}
+
+export interface NursingLookups {
+  roles: Array<{ id: number; code: string; name: string; category: string }>;
+  units: Array<{ id: number; code: string; name: string }>;
+  shifts: Array<{ id: number; code: string; name: string; start_time: string; end_time: string }>;
+  posts: Array<{ id: number; code: string; name: string; nursing_unit_id: number }>;
+}
+
+export interface NurseListParams {
+  search?: string;
+  status?: string;
+  unitId?: number;
+  page?: number;
+  limit?: number;
+}
+
+export interface RosterListParams {
+  from?: string;
+  to?: string;
+  unitId?: number;
+  nurseId?: number;
+  status?: string;
+}

@@ -966,6 +966,419 @@ app.get('/api/v1/audit/statistics', (req, res) => {
   });
 });
 
+// ============================================================================
+// NURSING DOMAIN (V3_0 demo) - in-memory CRUD mirroring Nest /nursing endpoints
+// ============================================================================
+const dayMs = 86400000;
+const isoDay = (offset) => new Date(Date.now() + offset * dayMs).toISOString().slice(0, 10);
+
+let nextNurseId = 5;
+let nextCredentialId = 7;
+let nextRosterId = 9;
+
+const mockUnits = [
+  { id: 1, code: 'ICU_A', name: 'ICU Unit A' },
+  { id: 2, code: 'ICU_B', name: 'ICU Unit B' },
+  { id: 3, code: 'ER_TRIAGE', name: 'ER Triage' },
+];
+const mockShifts = [
+  { id: 1, code: 'MORNING', name: 'Morning Shift', start_time: '07:00', end_time: '15:00' },
+  { id: 2, code: 'EVENING', name: 'Evening Shift', start_time: '15:00', end_time: '23:00' },
+  { id: 3, code: 'NIGHT', name: 'Night Shift', start_time: '23:00', end_time: '07:00' },
+];
+const mockPosts = [{ id: 1, code: 'ICU_A_BED_01_10', name: 'Bed 01-10', nursing_unit_id: 1 }];
+const mockNurseRoles = [
+  { id: 1, code: 'RN', name: 'Registered Nurse', category: 'Clinical' },
+  { id: 2, code: 'LPN', name: 'Licensed Practical Nurse', category: 'Clinical' },
+  { id: 3, code: 'CNA', name: 'Certified Nursing Assistant', category: 'Clinical' },
+  { id: 4, code: 'CHARGE_NURSE', name: 'Charge Nurse', category: 'Clinical' },
+];
+
+const mockNurses = [
+  { id: 1, employeeNumber: 'EMP-1001', firstName: 'Maria', lastName: 'Garcia', email: 'maria.garcia@hospital.local', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, employeeNumber: 'EMP-1002', firstName: 'Ahmed', lastName: 'Hassan', email: 'ahmed.hassan@hospital.local', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, employeeNumber: 'EMP-1003', firstName: 'Jennifer', lastName: 'Smith', email: 'jennifer.smith@hospital.local', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, employeeNumber: 'EMP-1004', firstName: 'David', lastName: 'Kim', email: 'david.kim@hospital.local', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+];
+
+const mockCredentials = [
+  { id: 1, nurseId: 1, credentialType: 'License', name: 'RN_LICENSE', issuingAuthority: 'SCFHS', credentialNumber: 'RN-88231', issuedDate: '2023-01-15', expiryDate: isoDay(400), status: 'Valid', verifiedBy: 9, verifiedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, nurseId: 2, credentialType: 'License', name: 'RN_LICENSE', issuingAuthority: 'SCFHS', credentialNumber: 'RN-90417', issuedDate: '2022-06-01', expiryDate: isoDay(300), status: 'Valid', verifiedBy: 9, verifiedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, nurseId: 3, credentialType: 'Certification', name: 'BLS', issuingAuthority: 'American Heart Association', credentialNumber: 'BLS-44520', issuedDate: isoDay(-340), expiryDate: isoDay(20), status: 'Valid', verifiedBy: 9, verifiedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, nurseId: 3, credentialType: 'License', name: 'LPN_LICENSE', issuingAuthority: 'SCFHS', credentialNumber: 'LPN-55201', issuedDate: '2021-09-15', expiryDate: isoDay(500), status: 'Valid', verifiedBy: 9, verifiedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 5, nurseId: 4, credentialType: 'Certification', name: 'CNA_CERT', issuingAuthority: 'TVTC', credentialNumber: 'CNA-77812', issuedDate: '2022-01-05', expiryDate: isoDay(200), status: 'Valid', verifiedBy: null, verifiedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 6, nurseId: 1, credentialType: 'Certification', name: 'ACLS', issuingAuthority: 'American Heart Association', credentialNumber: 'ACLS-99871', issuedDate: isoDay(-180), expiryDate: isoDay(185), status: 'PendingVerification', verifiedBy: null, verifiedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+];
+
+const mockRoster = [
+  { id: 1, nurseId: 1, unitId: 1, shiftId: 1, postId: 1, assignmentDate: isoDay(1), status: 'Confirmed', notes: 'Charge relief coverage', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, nurseId: 1, unitId: 1, shiftId: 3, postId: 1, assignmentDate: isoDay(3), status: 'Scheduled', notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, nurseId: 2, unitId: 1, shiftId: 2, postId: null, assignmentDate: isoDay(1), status: 'Confirmed', notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, nurseId: 2, unitId: 1, shiftId: 1, postId: null, assignmentDate: isoDay(4), status: 'Scheduled', notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 5, nurseId: 3, unitId: 1, shiftId: 3, postId: null, assignmentDate: isoDay(2), status: 'Scheduled', notes: 'Part-time: nights only', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 6, nurseId: 3, unitId: 1, shiftId: 3, postId: null, assignmentDate: isoDay(5), status: 'Scheduled', notes: 'Part-time: nights only', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 7, nurseId: 4, unitId: 2, shiftId: 1, postId: null, assignmentDate: isoDay(1), status: 'Confirmed', notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 8, nurseId: 4, unitId: 2, shiftId: 2, postId: null, assignmentDate: isoDay(2), status: 'Scheduled', notes: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+];
+
+// ---- shape mappers (identical to Nest NursingService output) ----
+function mockDaysUntil(expiryDate) {
+  if (!expiryDate) return null;
+  const today = isoDay(0);
+  return Math.round((Date.parse(expiryDate) - Date.parse(today)) / dayMs);
+}
+function mapMockCredential(c) {
+  return {
+    id: c.id, nurseId: c.nurseId, credentialType: c.credentialType, name: c.name,
+    issuingAuthority: c.issuingAuthority, credentialNumber: c.credentialNumber,
+    issuedDate: c.issuedDate, expiryDate: c.expiryDate,
+    daysUntilExpiry: mockDaysUntil(c.expiryDate),
+    status: c.status, verifiedBy: c.verifiedBy, verifiedAt: c.verifiedAt,
+    createdAt: c.createdAt, updatedAt: c.updatedAt,
+  };
+}
+function summarizeMockCredentials(nurseId) {
+  const active = mockCredentials.filter(
+    (c) => c.nurseId === nurseId && !['Revoked', 'Suspended'].includes(c.status),
+  );
+  let expired = 0; let expiringSoon = 0;
+  for (const c of active) {
+    const d = mockDaysUntil(c.expiryDate);
+    if (c.status === 'Expired' || (d !== null && d < 0)) expired++;
+    else if (d !== null && d <= 30) expiringSoon++;
+  }
+  return {
+    credentialSummary: active.length === 0 ? 'None' : expired > 0 ? 'Expired' : expiringSoon > 0 ? 'ExpiringSoon' : 'Valid',
+    credentialCounts: { total: active.length, expired, expiringSoon },
+  };
+}
+function mapMockNurse(n) {
+  return {
+    id: n.id, employeeNumber: n.employeeNumber, firstName: n.firstName, lastName: n.lastName,
+    fullName: `${n.firstName} ${n.lastName}`, email: n.email, phone: n.phone, hireDate: n.hireDate,
+    employmentType: n.employmentType, status: n.status, userId: n.userId, username: n.username,
+    primaryRole: n.primaryRole, homeUnit: n.homeUnit,
+    ...summarizeMockCredentials(n.id),
+    createdAt: n.createdAt, updatedAt: n.updatedAt,
+  };
+}
+function mapMockRoster(a) {
+  const nurse = mockNurses.find((n) => n.id === a.nurseId);
+  const unit = mockUnits.find((u) => u.id === a.unitId);
+  const shift = mockShifts.find((s) => s.id === a.shiftId);
+  const post = mockPosts.find((p) => p.id === a.postId);
+  return {
+    id: a.id, nurseId: a.nurseId,
+    nurseName: nurse ? `${nurse.firstName} ${nurse.lastName}` : undefined,
+    employeeNumber: nurse ? nurse.employeeNumber : undefined,
+    unitId: a.unitId, unitCode: unit ? unit.code : undefined, unitName: unit ? unit.name : undefined,
+    shiftId: a.shiftId, shiftCode: shift ? shift.code : undefined, shiftName: shift ? shift.name : undefined,
+    postId: a.postId != null ? a.postId : null, postCode: post ? post.code : undefined, postName: post ? post.name : undefined,
+    assignmentDate: a.assignmentDate, status: a.status, notes: a.notes,
+    createdAt: a.createdAt, updatedAt: a.updatedAt,
+  };
+}
+
+app.get('/api/v1/nursing/lookups', (req, res) => {
+  res.json({
+    success: true,
+    data: { roles: mockNurseRoles, units: mockUnits, shifts: mockShifts, posts: mockPosts },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/nursing/nurses', (req, res) => {
+  const { search, status, unitId } = req.query;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+  let rows = mockNurses.filter((n) => !n._deleted);
+  if (status) rows = rows.filter((n) => n.status === status);
+  if (unitId) rows = rows.filter((n) => n.homeUnit && n.homeUnit.id === parseInt(unitId, 10));
+  if (search) {
+    const q = String(search).toLowerCase();
+    rows = rows.filter(
+      (n) =>
+        n.firstName.toLowerCase().includes(q) ||
+        n.lastName.toLowerCase().includes(q) ||
+        n.employeeNumber.toLowerCase().includes(q),
+    );
+  }
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  res.json({
+    success: true,
+    data: {
+      items: rows.slice((page - 1) * limit, page * limit).map(mapMockNurse),
+      pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/nursing/nurses/:id/credentials', (req, res) => {
+  const nurseId = parseInt(req.params.id, 10);
+  const nurse = mockNurses.find((n) => n.id === nurseId && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + nurseId + ' not found', timestamp: new Date().toISOString() });
+  }
+  res.json({
+    success: true,
+    data: { items: mockCredentials.filter((c) => c.nurseId === nurseId).map(mapMockCredential) },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/nursing/nurses/:id', (req, res) => {
+  const nurse = mockNurses.find((n) => n.id === parseInt(req.params.id, 10) && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  res.json({
+    success: true,
+    data: {
+      nurse: {
+        ...mapMockNurse(nurse),
+        credentials: mockCredentials.filter((c) => c.nurseId === nurse.id).map(mapMockCredential),
+        upcomingAssignments: mockRoster
+          .filter((a) => a.nurseId === nurse.id && a.assignmentDate >= isoDay(0) && a.status !== 'Cancelled')
+          .map(mapMockRoster),
+      },
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/v1/nursing/nurses', (req, res) => {
+  const b = req.body || {};
+  if (!b.employee_number || !b.first_name || !b.last_name || !b.hire_date) {
+    return res.status(400).json({ success: false, message: 'employee_number, first_name, last_name, hire_date are required', timestamp: new Date().toISOString() });
+  }
+  if (mockNurses.some((n) => n.employeeNumber === b.employee_number)) {
+    return res.status(409).json({ success: false, message: 'Employee number "' + b.employee_number + '" already exists', timestamp: new Date().toISOString() });
+  }
+  if (b.user_id && mockNurses.some((n) => n.userId === b.user_id)) {
+    return res.status(409).json({ success: false, message: 'That login account is already linked to another nurse record', timestamp: new Date().toISOString() });
+  }
+  const role = mockNurseRoles.find((r) => r.id === b.primary_role_id) || null;
+  const unit = mockUnits.find((u) => u.id === b.home_unit_id) || null;
+  const linkedUser = b.user_id ? Object.keys(mockUsers).map((k) => mockUsers[k]).find((u) => u.id === b.user_id) : null;
+  const created = {
+    id: nextNurseId++,
+    employeeNumber: b.employee_number,
+    firstName: b.first_name,
+    lastName: b.last_name,
+    email: b.email || null,
+    phone: b.phone || null,
+    hireDate: String(b.hire_date).slice(0, 10),
+    employmentType: b.employment_type || 'FullTime',
+    status: 'Active',
+    userId: b.user_id || null,
+    username: linkedUser ? linkedUser.username : null,
+    primaryRole: role ? { id: role.id, code: role.code, name: role.name } : null,
+    homeUnit: unit,
+    _deleted: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  mockNurses.push(created);
+  res.status(201).json({ success: true, statusCode: 201, data: { nurse: mapMockNurse(created) }, timestamp: new Date().toISOString() });
+});
+
+app.patch('/api/v1/nursing/nurses/:id', (req, res) => {
+  const nurse = mockNurses.find((n) => n.id === parseInt(req.params.id, 10) && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  const b = req.body || {};
+  if (b.employee_number && mockNurses.some((n) => n.id !== nurse.id && n.employeeNumber === b.employee_number)) {
+    return res.status(409).json({ success: false, message: 'Employee number "' + b.employee_number + '" already exists', timestamp: new Date().toISOString() });
+  }
+  if (b.employee_number !== undefined) nurse.employeeNumber = b.employee_number;
+  if (b.first_name !== undefined) nurse.firstName = b.first_name;
+  if (b.last_name !== undefined) nurse.lastName = b.last_name;
+  if (b.email !== undefined) nurse.email = b.email;
+  if (b.phone !== undefined) nurse.phone = b.phone;
+  if (b.hire_date !== undefined) nurse.hireDate = String(b.hire_date).slice(0, 10);
+  if (b.employment_type !== undefined) nurse.employmentType = b.employment_type;
+  if (b.status !== undefined) nurse.status = b.status;
+  if (b.primary_role_id !== undefined) {
+    const role = mockNurseRoles.find((r) => r.id === b.primary_role_id);
+    nurse.primaryRole = role ? { id: role.id, code: role.code, name: role.name } : null;
+  }
+  if (b.home_unit_id !== undefined) nurse.homeUnit = mockUnits.find((u) => u.id === b.home_unit_id) || null;
+  nurse.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { nurse: mapMockNurse(nurse) }, timestamp: new Date().toISOString() });
+});
+
+app.delete('/api/v1/nursing/nurses/:id', (req, res) => {
+  const nurse = mockNurses.find((n) => n.id === parseInt(req.params.id, 10) && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  nurse._deleted = true;
+  nurse.status = 'Terminated';
+  nurse.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { message: 'Nurse #' + nurse.id + ' deleted' }, timestamp: new Date().toISOString() });
+});
+
+app.get('/api/v1/nursing/credentials/expiring', (req, res) => {
+  const days = Math.max(1, parseInt(req.query.days, 10) || 30);
+  const items = mockCredentials
+    .filter((c) => {
+      if (!['Valid', 'ExpiringSoon'].includes(c.status)) return false;
+      const nurse = mockNurses.find((n) => n.id === c.nurseId);
+      if (!nurse || nurse._deleted || nurse.status !== 'Active') return false;
+      const d = mockDaysUntil(c.expiryDate);
+      return d !== null && d <= days;
+    })
+    .sort((a, b) => String(a.expiryDate || '').localeCompare(String(b.expiryDate || '')))
+    .map((c) => {
+      const nurse = mockNurses.find((n) => n.id === c.nurseId);
+      return {
+        ...mapMockCredential(c),
+        nurse: nurse ? { id: nurse.id, employeeNumber: nurse.employeeNumber, fullName: nurse.firstName + ' ' + nurse.lastName } : null,
+      };
+    });
+  res.json({ success: true, data: { days, items }, timestamp: new Date().toISOString() });
+});
+
+app.post('/api/v1/nursing/credentials', (req, res) => {
+  const b = req.body || {};
+  if (!b.nurse_id || !b.credential_type || !b.name) {
+    return res.status(400).json({ success: false, message: 'nurse_id, credential_type, name are required', timestamp: new Date().toISOString() });
+  }
+  const nurse = mockNurses.find((n) => n.id === b.nurse_id && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + b.nurse_id + ' not found', timestamp: new Date().toISOString() });
+  }
+  if (mockCredentials.some((c) => c.nurseId === b.nurse_id && c.credentialType === b.credential_type && c.name === b.name)) {
+    return res.status(409).json({ success: false, message: 'Nurse already has a ' + b.credential_type + ' named "' + b.name + '"', timestamp: new Date().toISOString() });
+  }
+  const created = {
+    id: nextCredentialId++,
+    nurseId: b.nurse_id,
+    credentialType: b.credential_type,
+    name: b.name,
+    issuingAuthority: b.issuing_authority || null,
+    credentialNumber: b.credential_number || null,
+    issuedDate: b.issued_date ? String(b.issued_date).slice(0, 10) : null,
+    expiryDate: b.expiry_date ? String(b.expiry_date).slice(0, 10) : null,
+    status: 'PendingVerification',
+    verifiedBy: null,
+    verifiedAt: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  mockCredentials.push(created);
+  res.status(201).json({ success: true, statusCode: 201, data: { credential: mapMockCredential(created) }, timestamp: new Date().toISOString() });
+});
+
+app.patch('/api/v1/nursing/credentials/:id', (req, res) => {
+  const cred = mockCredentials.find((c) => c.id === parseInt(req.params.id, 10));
+  if (!cred) {
+    return res.status(404).json({ success: false, message: 'Credential #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  const b = req.body || {};
+  if (b.credential_type !== undefined) cred.credentialType = b.credential_type;
+  if (b.name !== undefined) cred.name = b.name;
+  if (b.issuing_authority !== undefined) cred.issuingAuthority = b.issuing_authority;
+  if (b.credential_number !== undefined) cred.credentialNumber = b.credential_number;
+  if (b.issued_date !== undefined) cred.issuedDate = String(b.issued_date).slice(0, 10);
+  if (b.expiry_date !== undefined) cred.expiryDate = String(b.expiry_date).slice(0, 10);
+  if (b.status !== undefined) cred.status = b.status;
+  cred.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { credential: mapMockCredential(cred) }, timestamp: new Date().toISOString() });
+});
+
+app.post('/api/v1/nursing/credentials/:id/verify', (req, res) => {
+  const cred = mockCredentials.find((c) => c.id === parseInt(req.params.id, 10));
+  if (!cred) {
+    return res.status(404).json({ success: false, message: 'Credential #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  cred.status = (req.body && req.body.status) || 'Valid';
+  cred.verifiedBy = 1;
+  cred.verifiedAt = new Date().toISOString();
+  cred.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { credential: mapMockCredential(cred) }, timestamp: new Date().toISOString() });
+});
+
+app.get('/api/v1/nursing/roster', (req, res) => {
+  const { unitId, nurseId, status } = req.query;
+  const from = req.query.from ? String(req.query.from).slice(0, 10) : isoDay(0);
+  const to = req.query.to ? String(req.query.to).slice(0, 10) : isoDay(31);
+  let rows = mockRoster.filter((a) => a.status !== 'Cancelled' && a.assignmentDate >= from && a.assignmentDate <= to);
+  if (unitId) rows = rows.filter((a) => a.unitId === parseInt(unitId, 10));
+  if (nurseId) rows = rows.filter((a) => a.nurseId === parseInt(nurseId, 10));
+  if (status) rows = rows.filter((a) => a.status === status);
+  res.json({
+    success: true,
+    data: { from, to, items: rows.map(mapMockRoster) },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/v1/nursing/roster', (req, res) => {
+  const b = req.body || {};
+  if (!b.nurse_id || !b.nursing_unit_id || !b.shift_id || !b.assignment_date) {
+    return res.status(400).json({ success: false, message: 'nurse_id, nursing_unit_id, shift_id, assignment_date are required', timestamp: new Date().toISOString() });
+  }
+  const date = String(b.assignment_date).slice(0, 10);
+  if (mockRoster.some((a) => a.nurseId === b.nurse_id && a.assignmentDate === date && a.shiftId === b.shift_id && a.status !== 'Cancelled')) {
+    return res.status(409).json({ success: false, message: 'Nurse #' + b.nurse_id + ' is already assigned to that shift on ' + date, timestamp: new Date().toISOString() });
+  }
+  const nurse = mockNurses.find((n) => n.id === b.nurse_id && !n._deleted);
+  if (!nurse) {
+    return res.status(404).json({ success: false, message: 'Nurse #' + b.nurse_id + ' not found', timestamp: new Date().toISOString() });
+  }
+  const created = {
+    id: nextRosterId++,
+    nurseId: b.nurse_id,
+    unitId: b.nursing_unit_id,
+    shiftId: b.shift_id,
+    postId: b.post_id != null ? b.post_id : null,
+    assignmentDate: date,
+    status: 'Scheduled',
+    notes: b.notes || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  mockRoster.push(created);
+  res.status(201).json({ success: true, statusCode: 201, data: { assignment: mapMockRoster(created) }, timestamp: new Date().toISOString() });
+});
+
+app.patch('/api/v1/nursing/roster/:id', (req, res) => {
+  const asg = mockRoster.find((a) => a.id === parseInt(req.params.id, 10) && a.status !== 'Cancelled');
+  if (!asg) {
+    return res.status(404).json({ success: false, message: 'Roster assignment #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  const b = req.body || {};
+  const newDate = b.assignment_date ? String(b.assignment_date).slice(0, 10) : asg.assignmentDate;
+  const newShiftId = b.shift_id !== undefined ? b.shift_id : asg.shiftId;
+  const newNurseId = b.nurse_id !== undefined ? b.nurse_id : asg.nurseId;
+  if (mockRoster.some((a) => a.id !== asg.id && a.nurseId === newNurseId && a.assignmentDate === newDate && a.shiftId === newShiftId && a.status !== 'Cancelled')) {
+    return res.status(409).json({ success: false, message: 'That change would double-book the nurse on this shift/date', timestamp: new Date().toISOString() });
+  }
+  asg.nurseId = newNurseId;
+  asg.shiftId = newShiftId;
+  asg.assignmentDate = newDate;
+  if (b.nursing_unit_id !== undefined) asg.unitId = b.nursing_unit_id;
+  if (b.post_id !== undefined) asg.postId = b.post_id;
+  if (b.status !== undefined) asg.status = b.status;
+  if (b.notes !== undefined) asg.notes = b.notes;
+  asg.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { assignment: mapMockRoster(asg) }, timestamp: new Date().toISOString() });
+});
+
+app.delete('/api/v1/nursing/roster/:id', (req, res) => {
+  const asg = mockRoster.find((a) => a.id === parseInt(req.params.id, 10) && a.status !== 'Cancelled');
+  if (!asg) {
+    return res.status(404).json({ success: false, message: 'Roster assignment #' + req.params.id + ' not found', timestamp: new Date().toISOString() });
+  }
+  asg.status = 'Cancelled';
+  asg.updatedAt = new Date().toISOString();
+  res.json({ success: true, data: { message: 'Roster assignment #' + asg.id + ' deleted' }, timestamp: new Date().toISOString() });
+});
+
 // Catch all
 app.use((req, res) => {
   res.status(404).json({

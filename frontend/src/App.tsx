@@ -10,6 +10,7 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { NurseMaster } from './pages/NurseMaster';
 import { Roster } from './pages/Roster';
+import { Credentials } from './pages/Credentials';
 import { Roles } from './pages/RBAC/Roles';
 import { EffectiveAccessPage } from './pages/RBAC/EffectiveAccess';
 import { AuditLogs } from './pages/RBAC/AuditLogs';
@@ -136,7 +137,7 @@ const App: React.FC = () => {
                   element={
                     <ProtectedRoute menuCode="CREDENTIALS" permissionCode="VIEW">
                       <AppLayout>
-                        <div>Credentials Page - TODO</div>
+                        <Credentials />
                       </AppLayout>
                     </ProtectedRoute>
                   }
