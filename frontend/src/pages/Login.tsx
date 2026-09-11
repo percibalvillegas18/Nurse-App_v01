@@ -72,77 +72,115 @@ export const Login: React.FC = () => {
   const attemptInfo = attemptMap[currentUsername] || null;
   const isLocked = lockCountdown > 0 || attemptInfo?.isLocked;
 
-  // Restore on mount
+  // Restore on mount - FIXED: fetch true counter from backend, not just localStorage
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.username) {
-          form.setFieldsValue(parsed);
-          setLastAttempt(parsed);
-          setCurrentUsername(parsed.username);
-        }
-      }
-      const attemptSaved = localStorage.getItem(ATTEMPT_INFO_KEY);
-      if (attemptSaved) {
-        const map: AttemptMap = JSON.parse(attemptSaved);
-        // Check if current user's lock expired
-        const currentInfo = map[currentUsername];
-        if (currentInfo?.lockedUntil) {
-          const remaining = Math.max(0, Math.ceil((new Date(currentInfo.lockedUntil).getTime() - Date.now()) / 1000));
-          if (remaining > 0) {
-            setLockCountdown(remaining);
-            startCountdown(remaining);
-          } else {
-            // Expired, clear for this user
-            delete map[currentUsername];
-            localStorage.setItem(ATTEMPT_INFO_KEY, JSON.stringify(map));
-            setAttemptMap(map);
+    const init = async () => {
+      try {
+        const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.username) {
+            form.setFieldsValue(parsed);
+            setLastAttempt(parsed);
+            setCurrentUsername(parsed.username);
+            // Fetch true attempt count from backend for this user (fixes 1->5 jump from stale localStorage)
+            try {
+              const resp = await apiClient.get(`/auth/attempts/${parsed.username}`);
+              const data = resp.data.data;
+              if (data.failedAttempts > 0) {
+                const map: AttemptMap = {};
+                map[parsed.username] = {
+                  failedAttempts: data.failedAttempts,
+                  remainingAttempts: data.remainingAttempts,
+                  maxAttempts: data.maxAttempts,
+                  lockedUntil: data.lockedUntil,
+                  remainingSeconds: data.remainingSeconds,
+                  isLocked: data.isLocked,
+                  username: parsed.username,
+                };
+                setAttemptMap(map);
+                persistAttemptMap(map);
+                if (data.isLocked && data.remainingSeconds > 0) {
+                  setLockCountdown(data.remainingSeconds);
+                  startCountdown(data.remainingSeconds, parsed.username);
+                }
+              }
+            } catch {}
           }
         }
-      }
-    } catch {}
+      } catch {}
+    };
+    init();
   }, [form]);
 
-  // When currentUsername changes, update countdown for that user
+  // When currentUsername changes, fetch true counter from backend and update countdown
   useEffect(() => {
-    const info = attemptMap[currentUsername];
-    if (info?.lockedUntil) {
-      const remaining = Math.max(0, Math.ceil((new Date(info.lockedUntil).getTime() - Date.now()) / 1000));
-      if (remaining > 0) {
-        setLockCountdown(remaining);
-        startCountdown(remaining);
+    const fetchAttemptForUser = async () => {
+      try {
+        const resp = await apiClient.get(`/auth/attempts/${currentUsername}`);
+        const data = resp.data.data;
+        if (data.failedAttempts > 0 || data.isLocked) {
+          setAttemptMap(prev => {
+            const newMap = { ...prev, [currentUsername]: {
+              failedAttempts: data.failedAttempts,
+              remainingAttempts: data.remainingAttempts,
+              maxAttempts: data.maxAttempts,
+              lockedUntil: data.lockedUntil,
+              remainingSeconds: data.remainingSeconds,
+              isLocked: data.isLocked,
+              username: currentUsername,
+            }};
+            persistAttemptMap(newMap);
+            return newMap;
+          });
+          if (data.isLocked && data.remainingSeconds > 0) {
+            setLockCountdown(data.remainingSeconds);
+            startCountdown(data.remainingSeconds, currentUsername);
+            return;
+          }
+        }
+      } catch {
+        // Backend may not have endpoint (real backend), fallback to local map
+      }
+
+      const info = attemptMap[currentUsername];
+      if (info?.lockedUntil) {
+        const remaining = Math.max(0, Math.ceil((new Date(info.lockedUntil).getTime() - Date.now()) / 1000));
+        if (remaining > 0) {
+          setLockCountdown(remaining);
+          startCountdown(remaining, currentUsername);
+        } else {
+          setLockCountdown(0);
+          const newMap = { ...attemptMap };
+          delete newMap[currentUsername];
+          setAttemptMap(newMap);
+          persistAttemptMap(newMap);
+        }
       } else {
         setLockCountdown(0);
-        // Clear expired lock for this user
-        const newMap = { ...attemptMap };
-        delete newMap[currentUsername];
-        setAttemptMap(newMap);
-        persistAttemptMap(newMap);
+        if (countdownRef.current) clearInterval(countdownRef.current);
       }
-    } else {
-      setLockCountdown(0);
-      if (countdownRef.current) clearInterval(countdownRef.current);
-    }
+    };
+    fetchAttemptForUser();
   }, [currentUsername]);
 
-  const startCountdown = (seconds: number) => {
+  const startCountdown = (seconds: number, usernameParam?: string) => {
+    const targetUsername = usernameParam || currentUsername;
     if (countdownRef.current) clearInterval(countdownRef.current);
     setLockCountdown(seconds);
     countdownRef.current = setInterval(() => {
       setLockCountdown(prev => {
         if (prev <= 1) {
           if (countdownRef.current) clearInterval(countdownRef.current);
-          // Unlock for current user
+          // Unlock for target user (fix closure bug - use param not stale currentUsername)
           setAttemptMap(prevMap => {
             const newMap = { ...prevMap };
-            delete newMap[currentUsername];
+            delete newMap[targetUsername];
             persistAttemptMap(newMap);
             return newMap;
           });
           setGenericError(null);
-          message.success(`Lock expired for ${currentUsername} - you can try again`);
+          message.success(`Lock expired for ${targetUsername} - you can try again`);
           return 0;
         }
         return prev - 1;

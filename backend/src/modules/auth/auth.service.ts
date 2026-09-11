@@ -60,14 +60,29 @@ export class AuthService {
     }
 
     // Check lockout - 5 attempts -> 10 min lock (user requested)
-    if (user.locked_until && user.locked_until > new Date()) {
-      const unlockTime = user.locked_until.toISOString();
-      const remainingMs = user.locked_until.getTime() - Date.now();
-      const remainingSec = Math.ceil(remainingMs / 1000);
-      const remainingMin = Math.ceil(remainingMs / 60000);
-      throw new ForbiddenException(
-        `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime} (${remainingMin} min / ${remainingSec}s left). Please wait 10 minutes or contact administrator. Attempts: ${user.failed_login_attempts}/5`,
-      );
+    // If lock expired, reset counter (fix for 1 attempt -> 5/5 bug after expiry)
+    if (user.locked_until) {
+      if (user.locked_until > new Date()) {
+        const unlockTime = user.locked_until.toISOString();
+        const remainingMs = user.locked_until.getTime() - Date.now();
+        const remainingSec = Math.ceil(remainingMs / 1000);
+        const remainingMin = Math.ceil(remainingMs / 60000);
+        throw new ForbiddenException(
+          `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime} (${remainingMin} min / ${remainingSec}s left). Please wait 10 minutes or contact administrator. Attempts: ${user.failed_login_attempts}/5`,
+        );
+      } else {
+        // Lock expired - reset counter to 0 so next fail is 1/5 not 6/5
+        await this.prisma.auth_users.update({
+          where: { id: user.id },
+          data: {
+            failed_login_attempts: 0,
+            locked_until: null,
+          },
+        });
+        user.failed_login_attempts = 0;
+        user.locked_until = null;
+        this.logger.log(`Lock expired for ${user.username}, reset counter to 0`);
+      }
     }
 
     if (user.status !== 'Active') {
