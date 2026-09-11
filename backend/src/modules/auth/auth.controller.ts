@@ -79,38 +79,85 @@ export class AuthController {
 
   @Get('attempts/:username')
   async getAttempts(@Req() req: any) {
-    // For preview, try to get from prisma mock
     const username = req.params.username;
     try {
+      // Get global attempts
+      const global = (this.authService as any).getGlobalAttempts ? (this.authService as any).getGlobalAttempts() : { count: 0, lockedUntil: null, remainingSeconds: 0 };
       const user = await (this.authService as any).prisma.auth_users.findFirst({
         where: { OR: [{ username }, { email: username }] },
       });
+      const isGlobalLocked = global.lockedUntil && new Date(global.lockedUntil) > new Date();
       if (!user) {
         return {
           success: true,
-          data: { username, failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false },
+          data: { 
+            username, 
+            failedAttempts: global.count, // GLOBAL same counter
+            perUserAttempts: 0,
+            remainingAttempts: Math.max(0, 5 - global.count), 
+            maxAttempts: 5, 
+            isLocked: isGlobalLocked,
+            isGlobalLocked,
+            lockedUntil: global.lockedUntil,
+            remainingSeconds: global.remainingSeconds,
+            isGlobal: true,
+          },
           timestamp: new Date().toISOString(),
         };
       }
-      const isLocked = user.locked_until && new Date(user.locked_until) > new Date();
-      const remainingMs = isLocked ? new Date(user.locked_until).getTime() - Date.now() : 0;
+      const isPerUserLocked = user.locked_until && new Date(user.locked_until) > new Date();
+      const isLocked = isGlobalLocked || isPerUserLocked;
+      const remainingMs = isLocked ? Math.max(
+        global.lockedUntil ? new Date(global.lockedUntil).getTime() - Date.now() : 0,
+        user.locked_until ? new Date(user.locked_until).getTime() - Date.now() : 0
+      ) : 0;
       return {
         success: true,
         data: {
           username,
-          failedAttempts: user.failed_login_attempts || 0,
-          remainingAttempts: Math.max(0, 5 - (user.failed_login_attempts || 0)),
+          failedAttempts: global.count, // GLOBAL same for username+password
+          perUserAttempts: user.failed_login_attempts || 0,
+          remainingAttempts: Math.max(0, 5 - global.count),
           maxAttempts: 5,
           isLocked,
-          lockedUntil: user.locked_until,
+          isGlobalLocked,
+          lockedUntil: global.lockedUntil || user.locked_until,
           remainingSeconds: Math.ceil(remainingMs / 1000),
+          isGlobal: true,
         },
         timestamp: new Date().toISOString(),
       };
     } catch {
       return {
         success: true,
-        data: { username, failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false },
+        data: { username, failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false, isGlobal: true },
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  @Get('attempts')
+  async getGlobalAttempts() {
+    try {
+      const global = (this.authService as any).getGlobalAttempts ? (this.authService as any).getGlobalAttempts() : { count: 0, lockedUntil: null, remainingSeconds: 0 };
+      return {
+        success: true,
+        data: {
+          failedAttempts: global.count,
+          remainingAttempts: Math.max(0, 5 - global.count),
+          maxAttempts: 5,
+          isLocked: !!global.lockedUntil && new Date(global.lockedUntil) > new Date(),
+          lockedUntil: global.lockedUntil,
+          remainingSeconds: global.remainingSeconds,
+          isGlobal: true,
+          message: 'GLOBAL counter - username+password share same count',
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch {
+      return {
+        success: true,
+        data: { failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false, isGlobal: true },
         timestamp: new Date().toISOString(),
       };
     }
@@ -120,6 +167,10 @@ export class AuthController {
   async resetAttempts(@Body() body: { username?: string }) {
     const username = body?.username;
     try {
+      // Reset global
+      if ((this.authService as any).resetGlobalAttempts) {
+        (this.authService as any).resetGlobalAttempts();
+      }
       if (username) {
         const user = await (this.authService as any).prisma.auth_users.findFirst({
           where: { OR: [{ username }, { email: username }] },
@@ -143,7 +194,7 @@ export class AuthController {
     } catch {}
     return {
       success: true,
-      message: username ? `Attempts reset for ${username}` : 'All attempts reset',
+      message: username ? `Attempts reset for ${username} (GLOBAL reset)` : 'All attempts reset (GLOBAL + per-user)',
       timestamp: new Date().toISOString(),
     };
   }

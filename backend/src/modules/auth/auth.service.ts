@@ -15,6 +15,10 @@ import { AuditService } from '../audit/audit.service';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly bcryptRounds: number;
+  // GLOBAL counter for username+password errors share same count (user requested global)
+  private globalAttempts = { count: 0, lockedUntil: null as Date | null, lastAttemptAt: null as Date | null };
+  private readonly MAX_ATTEMPTS = 5;
+  private readonly LOCK_DURATION_MS = 10 * 60 * 1000; // 10 min
 
   constructor(
     private prisma: PrismaService,
@@ -25,7 +29,30 @@ export class AuthService {
     this.bcryptRounds = parseInt(configService.get('BCRYPT_ROUNDS', '12'), 10);
   }
 
+  private isGlobalLocked(): boolean {
+    if (!this.globalAttempts.lockedUntil) return false;
+    if (this.globalAttempts.lockedUntil > new Date()) return true;
+    // Expired, reset
+    this.globalAttempts.count = 0;
+    this.globalAttempts.lockedUntil = null;
+    return false;
+  }
+
+  private getGlobalRemainingSeconds(): number {
+    if (!this.globalAttempts.lockedUntil) return 0;
+    return Math.max(0, Math.ceil((this.globalAttempts.lockedUntil.getTime() - Date.now()) / 1000));
+  }
+
   async validateUser(username: string, password: string) {
+    // Check GLOBAL lock first - same counter for username+password errors
+    if (this.isGlobalLocked()) {
+      const remainingSec = this.getGlobalRemainingSeconds();
+      const remainingMin = Math.ceil(remainingSec / 60);
+      throw new ForbiddenException(
+        `GLOBAL lock: All logins locked due to ${this.MAX_ATTEMPTS} failed attempts (username+password share same counter). Try again in ${remainingMin} min (${remainingSec}s). Global count ${this.globalAttempts.count}/${this.MAX_ATTEMPTS}. Locked until ${this.globalAttempts.lockedUntil?.toISOString()}`,
+      );
+    }
+
     // Validate input presence for better UX
     if (!username || username.trim() === '') {
       throw new BadRequestException('Username is required. Please enter your username or email.');
@@ -46,16 +73,22 @@ export class AuthService {
     });
 
     if (!user) {
+      // GLOBAL counter increment for USER_NOT_FOUND too (same count)
+      this.globalAttempts.count += 1;
+      this.globalAttempts.lastAttemptAt = new Date();
+      if (this.globalAttempts.count >= this.MAX_ATTEMPTS) {
+        this.globalAttempts.lockedUntil = new Date(Date.now() + this.LOCK_DURATION_MS);
+      }
+
       await this.auditService.log({
         action: 'LOGIN_FAILURE',
         entityType: 'Auth',
-        description: `Login failed - user not found: ${trimmedUsername}`,
+        description: `Login failed - user not found: ${trimmedUsername} - GLOBAL ${this.globalAttempts.count}/${this.MAX_ATTEMPTS}`,
         status: 'Failure',
         errorMessage: 'User not found',
       });
-      // More helpful message for UX - tell user what they entered and valid options
       throw new UnauthorizedException(
-        `Username "${trimmedUsername}" not found. Please check spelling. Valid demo accounts: admin.system, susan.lee, james.wilson, maria.garcia, ahmed.hassan, jennifer.smith, david.kim, rachel.brown, patricia.johnson, michael.wong`,
+        `Username "${trimmedUsername}" not found. GLOBAL Attempt ${this.globalAttempts.count}/${this.MAX_ATTEMPTS}. ${Math.max(0, this.MAX_ATTEMPTS - this.globalAttempts.count)} left before 10-min GLOBAL lock (username+password share same counter). Valid: admin.system, susan.lee, etc.`,
       );
     }
 
@@ -68,7 +101,7 @@ export class AuthService {
         const remainingSec = Math.ceil(remainingMs / 1000);
         const remainingMin = Math.ceil(remainingMs / 60000);
         throw new ForbiddenException(
-          `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime} (${remainingMin} min / ${remainingSec}s left). Please wait 10 minutes or contact administrator. Attempts: ${user.failed_login_attempts}/5`,
+          `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime} (${remainingMin} min / ${remainingSec}s left). Please wait 10 minutes or contact administrator. Attempts: ${user.failed_login_attempts}/5 - GLOBAL ${this.globalAttempts.count}/5`,
         );
       } else {
         // Lock expired - reset counter to 0 so next fail is 1/5 not 6/5
@@ -94,14 +127,19 @@ export class AuthService {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordValid) {
-      // Increment failed attempts - 5 attempts -> 10 min lock
+      // GLOBAL counter
+      this.globalAttempts.count += 1;
+      this.globalAttempts.lastAttemptAt = new Date();
+      if (this.globalAttempts.count >= this.MAX_ATTEMPTS) {
+        this.globalAttempts.lockedUntil = new Date(Date.now() + this.LOCK_DURATION_MS);
+      }
+
+      // Per-user also
       const failedAttempts = user.failed_login_attempts + 1;
       let lockedUntil = null;
-      const MAX_ATTEMPTS = 5;
-      const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes as requested by user
 
-      if (failedAttempts >= MAX_ATTEMPTS) {
-        lockedUntil = new Date(Date.now() + LOCK_DURATION_MS);
+      if (failedAttempts >= this.MAX_ATTEMPTS) {
+        lockedUntil = new Date(Date.now() + this.LOCK_DURATION_MS);
       }
 
       await this.prisma.auth_users.update({
@@ -117,22 +155,24 @@ export class AuthService {
         username: user.username,
         action: 'LOGIN_FAILURE',
         entityType: 'Auth',
-        description: `Failed login attempt ${failedAttempts}/${MAX_ATTEMPTS} for ${trimmedUsername}${lockedUntil ? ` - LOCKED until ${lockedUntil.toISOString()}` : ''}`,
+        description: `Failed login attempt ${failedAttempts}/${this.MAX_ATTEMPTS} for ${trimmedUsername} - GLOBAL ${this.globalAttempts.count}/${this.MAX_ATTEMPTS}${lockedUntil ? ` - LOCKED until ${lockedUntil.toISOString()}` : ''}`,
         status: 'Failure',
       });
 
-      if (failedAttempts >= MAX_ATTEMPTS) {
+      if (this.globalAttempts.count >= this.MAX_ATTEMPTS || failedAttempts >= this.MAX_ATTEMPTS) {
         throw new UnauthorizedException(
-          `Incorrect password for "${user.username}". Account locked after ${failedAttempts}/${MAX_ATTEMPTS} failed attempts. Locked for 10 minutes until ${lockedUntil?.toISOString()}. Demo password is Password123! Wait 10 min or contact admin.`,
+          `Incorrect password for "${user.username}". GLOBAL locked after ${this.globalAttempts.count}/${this.MAX_ATTEMPTS} fails (username+password share same). Locked for 10 minutes until ${this.globalAttempts.lockedUntil?.toISOString() || lockedUntil?.toISOString()}. Demo: Password123!`,
         );
       }
 
       throw new UnauthorizedException(
-        `Incorrect password for "${user.username}" (attempt ${failedAttempts}/${MAX_ATTEMPTS}). ${MAX_ATTEMPTS - failedAttempts} attempts left before 10-min lock. Demo: Password123! Hint: capital P, 123, !`,
+        `Incorrect password for "${user.username}" (GLOBAL attempt ${this.globalAttempts.count}/${this.MAX_ATTEMPTS}, per-user ${failedAttempts}/${this.MAX_ATTEMPTS}). ${this.MAX_ATTEMPTS - this.globalAttempts.count} left before 10-min GLOBAL lock. Demo: Password123!`,
       );
     }
 
-    // Reset failed attempts on success
+    // Reset both GLOBAL and per-user on success
+    this.globalAttempts.count = 0;
+    this.globalAttempts.lockedUntil = null;
     await this.prisma.auth_users.update({
       where: { id: user.id },
       data: {
@@ -187,7 +227,7 @@ export class AuthService {
       username: user.username,
       action: 'LOGIN_SUCCESS',
       entityType: 'Auth',
-      description: `User ${user.username} logged in`,
+      description: `User ${user.username} logged in - GLOBAL counter reset`,
       ipAddress: ip,
       userAgent,
       sessionId,
@@ -273,5 +313,19 @@ export class AuthService {
 
   async hashPassword(plain: string): Promise<string> {
     return bcrypt.hash(plain, this.bcryptRounds);
+  }
+
+  // For reset endpoint
+  resetGlobalAttempts() {
+    this.globalAttempts.count = 0;
+    this.globalAttempts.lockedUntil = null;
+    this.globalAttempts.lastAttemptAt = null;
+  }
+
+  getGlobalAttempts() {
+    return {
+      ...this.globalAttempts,
+      remainingSeconds: this.globalAttempts.lockedUntil ? Math.max(0, Math.ceil((this.globalAttempts.lockedUntil.getTime() - Date.now()) / 1000)) : 0,
+    };
   }
 }

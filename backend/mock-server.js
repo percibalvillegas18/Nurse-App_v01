@@ -158,10 +158,11 @@ const mockUsers = {
 // Track last logged in user for /me endpoint
 let lastLoggedInUser = mockUsers['admin.system'];
 
-// --- LOGIN ATTEMPT COUNTER (5 attempts -> 10 min lock) ---
+// --- LOGIN ATTEMPT COUNTER (5 attempts -> 10 min lock) - GLOBAL COUNTER (user requested) ---
 const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes as requested
-const loginAttempts = {}; // username -> { count, lockedUntil, lastAttemptAt }
+const loginAttempts = {}; // username -> { count, lockedUntil, lastAttemptAt } - kept for per-user display but also global
+let globalAttempts = { count: 0, lockedUntil: null, lastAttemptAt: null }; // GLOBAL counter - same for username+password errors
 
 function getAttemptRecord(username) {
   if (!loginAttempts[username]) {
@@ -171,6 +172,15 @@ function getAttemptRecord(username) {
 }
 
 function isLocked(username) {
+  // Check global lock first - if global locked, all users locked
+  if (globalAttempts.lockedUntil && Date.now() < globalAttempts.lockedUntil) {
+    return true;
+  }
+  if (globalAttempts.lockedUntil && Date.now() >= globalAttempts.lockedUntil) {
+    globalAttempts.count = 0;
+    globalAttempts.lockedUntil = null;
+  }
+  // Also check per-user lock
   const record = loginAttempts[username];
   if (!record || !record.lockedUntil) return false;
   if (Date.now() < record.lockedUntil) return true;
@@ -181,9 +191,22 @@ function isLocked(username) {
 }
 
 function getRemainingLockTime(username) {
+  // Global lock takes precedence
+  if (globalAttempts.lockedUntil) {
+    const remaining = globalAttempts.lockedUntil - Date.now();
+    if (remaining > 0) return remaining;
+  }
   const record = loginAttempts[username];
   if (!record || !record.lockedUntil) return 0;
   return Math.max(0, record.lockedUntil - Date.now());
+}
+
+function getGlobalAttemptInfo() {
+  return {
+    count: globalAttempts.count,
+    lockedUntil: globalAttempts.lockedUntil,
+    remainingMs: globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0,
+  };
 }
 
 const mockMenus = [
@@ -331,28 +354,31 @@ app.post('/api/v1/auth/login', (req, res) => {
 
   const trimmedUsername = username.trim();
 
-  // Check if account is locked due to 5 failed attempts (10 min lock)
+  // Check if account is locked due to 5 failed attempts (10 min lock) - GLOBAL lock (same count for username+password errors)
   if (isLocked(trimmedUsername)) {
     const remainingMs = getRemainingLockTime(trimmedUsername);
     const remainingSec = Math.ceil(remainingMs / 1000);
     const remainingMin = Math.ceil(remainingMs / 60000);
-    const record = getAttemptRecord(trimmedUsername);
-    console.log(`[MOCK] Login BLOCKED for ${trimmedUsername}: locked for ${remainingSec}s, attempts ${record.count}/${MAX_ATTEMPTS}`);
+    const globalInfo = getGlobalAttemptInfo();
+    const record = loginAttempts[trimmedUsername] || { count: globalInfo.count };
+    console.log(`[MOCK] Login BLOCKED for ${trimmedUsername}: GLOBAL locked for ${remainingSec}s, global attempts ${globalInfo.count}/${MAX_ATTEMPTS}, per-user ${record.count || 0}/${MAX_ATTEMPTS}`);
     return res.status(423).json({
       success: false,
       statusCode: 423,
       error: 'LOCKED',
       errorCode: 'ACCOUNT_LOCKED',
-      message: `Account "${trimmedUsername}" is locked due to ${MAX_ATTEMPTS} failed attempts. Try again in ${remainingMin} minute(s) (${remainingSec}s). Locked until ${new Date(record.lockedUntil).toISOString()}`,
+      message: `Account locked due to ${MAX_ATTEMPTS} failed attempts (username+password errors share same counter). Try again in ${remainingMin} minute(s) (${remainingSec}s). Global count ${globalAttempts.count}/${MAX_ATTEMPTS}. Locked until ${new Date(globalAttempts.lockedUntil || Date.now() + remainingMs).toISOString()}`,
       details: {
         username: trimmedUsername,
-        failedAttempts: record.count,
+        failedAttempts: globalAttempts.count, // GLOBAL count as requested
+        perUserAttempts: record.count || 0,
         maxAttempts: MAX_ATTEMPTS,
-        lockedUntil: new Date(record.lockedUntil).toISOString(),
+        lockedUntil: new Date(globalAttempts.lockedUntil || Date.now() + remainingMs).toISOString(),
         remainingSeconds: remainingSec,
         remainingMinutes: remainingMin,
         retryAfter: remainingSec,
-        hint: `Wait ${remainingMin} minute(s) or contact admin. Counter resets after lock expires.`
+        isGlobal: true,
+        hint: `GLOBAL counter: username+password errors share same count. Wait ${remainingMin} min. Counter resets after lock.`
       },
       timestamp: new Date().toISOString(),
     });
@@ -362,28 +388,63 @@ app.post('/api/v1/auth/login', (req, res) => {
   const user = mockUsers[trimmedUsername] || Object.values(mockUsers).find(u => u.email.toLowerCase() === trimmedUsername.toLowerCase());
   
   if (!user) {
-    // For security, we still count attempts for non-existent users to prevent enumeration, but show USER_NOT_FOUND
+    // GLOBAL counter: username+password errors share same count
+    globalAttempts.count += 1;
+    globalAttempts.lastAttemptAt = new Date().toISOString();
+    if (globalAttempts.count >= MAX_ATTEMPTS) {
+      globalAttempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
+    }
+    // Also track per-user for display
     const record = getAttemptRecord(trimmedUsername);
     record.count += 1;
     record.lastAttemptAt = new Date().toISOString();
     if (record.count >= MAX_ATTEMPTS) {
       record.lockedUntil = Date.now() + LOCK_DURATION_MS;
     }
-    console.log(`[MOCK] Login FAILED: user ${username} not found, attempt ${record.count}/${MAX_ATTEMPTS}`);
+    console.log(`[MOCK] Login FAILED: user ${username} not found, GLOBAL attempt ${globalAttempts.count}/${MAX_ATTEMPTS}, per-user ${record.count}/${MAX_ATTEMPTS}`);
+
+    // If reached max, return LOCKED (same as password case)
+    if (globalAttempts.count >= MAX_ATTEMPTS) {
+      return res.status(423).json({
+        success: false,
+        statusCode: 423,
+        error: 'LOCKED',
+        errorCode: 'ACCOUNT_LOCKED',
+        message: `Username "${trimmedUsername}" not found. GLOBAL Account locked after ${globalAttempts.count}/${MAX_ATTEMPTS} fails (username+password share same). Locked for 10 min until ${new Date(globalAttempts.lockedUntil).toISOString()}`,
+        details: {
+          enteredUsername: trimmedUsername,
+          validUsernames: Object.keys(mockUsers),
+          failedAttempts: globalAttempts.count,
+          perUserAttempts: record.count,
+          remainingAttempts: 0,
+          maxAttempts: MAX_ATTEMPTS,
+          lockedUntil: new Date(globalAttempts.lockedUntil).toISOString(),
+          remainingSeconds: 600,
+          remainingMinutes: 10,
+          retryAfter: 600,
+          isGlobal: true,
+          hint: 'GLOBAL counter: any username+password error counts together. Same counter for all.'
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'USER_NOT_FOUND',
-      message: `Username "${trimmedUsername}" not found. Attempt ${record.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - record.count} attempts left before 10-min lock.`,
+      message: `Username "${trimmedUsername}" not found. GLOBAL Attempt ${globalAttempts.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - globalAttempts.count} left before 10-min GLOBAL lock (username+password share same counter).`,
       details: {
         enteredUsername: trimmedUsername,
         validUsernames: Object.keys(mockUsers),
-        failedAttempts: record.count,
-        remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
+        failedAttempts: globalAttempts.count, // GLOBAL as requested
+        perUserAttempts: record.count,
+        remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
         maxAttempts: MAX_ATTEMPTS,
-        willLockAfter: MAX_ATTEMPTS - record.count <= 0 ? 'Next failed attempt locks for 10 minutes' : `${MAX_ATTEMPTS - record.count} more fails until lock`,
-        hint: 'Username is case-sensitive. Use exact demo username like admin.system or susan.lee'
+        isGlobal: true,
+        willLockAfter: MAX_ATTEMPTS - globalAttempts.count <= 0 ? 'Next fail locks ALL for 10 min' : `${MAX_ATTEMPTS - globalAttempts.count} more fails until GLOBAL lock`,
+        hint: 'GLOBAL counter: any username+password error counts together. Same counter for all.'
       },
       timestamp: new Date().toISOString(),
     });
@@ -391,63 +452,77 @@ app.post('/api/v1/auth/login', (req, res) => {
 
   // Validate password - must be Password123!
   if (password !== 'Password123!') {
+    // GLOBAL counter
+    globalAttempts.count += 1;
+    globalAttempts.lastAttemptAt = new Date().toISOString();
+    if (globalAttempts.count >= MAX_ATTEMPTS) {
+      globalAttempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
+    }
+    // Per-user also
     const record = getAttemptRecord(user.username);
     record.count += 1;
     record.lastAttemptAt = new Date().toISOString();
-    
     if (record.count >= MAX_ATTEMPTS) {
       record.lockedUntil = Date.now() + LOCK_DURATION_MS;
-      console.log(`[MOCK] Login FAILED for ${username}: invalid password, LOCKED after ${record.count}/${MAX_ATTEMPTS}`);
+    }
+    
+    if (globalAttempts.count >= MAX_ATTEMPTS) {
+      console.log(`[MOCK] Login FAILED for ${username}: invalid password, GLOBAL LOCKED after ${globalAttempts.count}/${MAX_ATTEMPTS}`);
       return res.status(423).json({
         success: false,
         statusCode: 423,
         error: 'LOCKED',
         errorCode: 'ACCOUNT_LOCKED',
-        message: `Incorrect password for "${user.username}". Account locked after ${record.count} failed attempts. Try again in 10 minutes. Locked until ${new Date(record.lockedUntil).toISOString()}`,
+        message: `Incorrect password for "${user.username}". GLOBAL Account locked after ${globalAttempts.count} failed attempts (username+password share same counter). Try again in 10 minutes. Locked until ${new Date(globalAttempts.lockedUntil).toISOString()}`,
         details: {
           username: user.username,
-          failedAttempts: record.count,
+          failedAttempts: globalAttempts.count, // GLOBAL
+          perUserAttempts: record.count,
           maxAttempts: MAX_ATTEMPTS,
           remainingAttempts: 0,
-          lockedUntil: new Date(record.lockedUntil).toISOString(),
+          lockedUntil: new Date(globalAttempts.lockedUntil).toISOString(),
           remainingSeconds: 600,
           remainingMinutes: 10,
           retryAfter: 600,
-          hint: 'Demo password is Password123! - Wait 10 minutes or contact admin',
-          commonMistakes: ['Check Caps Lock', 'Password is case-sensitive', 'Must include ! at end']
+          isGlobal: true,
+          hint: 'GLOBAL counter: username+password errors share same count. Wait 10 min.',
         },
         timestamp: new Date().toISOString(),
       });
     }
 
-    console.log(`[MOCK] Login FAILED for ${username}: invalid password, attempt ${record.count}/${MAX_ATTEMPTS}`);
+    console.log(`[MOCK] Login FAILED for ${username}: invalid password, GLOBAL attempt ${globalAttempts.count}/${MAX_ATTEMPTS}, per-user ${record.count}/${MAX_ATTEMPTS}`);
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'INVALID_PASSWORD',
-      message: `Incorrect password for "${user.username}". Attempt ${record.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - record.count} attempts left before 10-min lock.`,
+      message: `Incorrect password for "${user.username}". GLOBAL Attempt ${globalAttempts.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - globalAttempts.count} left before 10-min GLOBAL lock (username+password share same).`,
       details: {
         username: user.username,
-        failedAttempts: record.count,
-        remainingAttempts: MAX_ATTEMPTS - record.count,
+        failedAttempts: globalAttempts.count, // GLOBAL as requested
+        perUserAttempts: record.count,
+        remainingAttempts: MAX_ATTEMPTS - globalAttempts.count,
         maxAttempts: MAX_ATTEMPTS,
         enteredPasswordLength: password.length,
-        willLockAfter: `${MAX_ATTEMPTS - record.count} more fails until 10-min lock`,
-        hint: 'Demo password is Password123! (capital P, numbers 123, exclamation mark)',
-        commonMistakes: ['Check Caps Lock', 'Password is case-sensitive', 'Must include ! at end']
+        isGlobal: true,
+        willLockAfter: `${MAX_ATTEMPTS - globalAttempts.count} more fails until GLOBAL 10-min lock`,
+        hint: 'GLOBAL counter: any username or password error counts together',
       },
       timestamp: new Date().toISOString(),
     });
   }
 
-  // SUCCESS - reset counter
+  // SUCCESS - reset GLOBAL and per-user counter
+  globalAttempts.count = 0;
+  globalAttempts.lockedUntil = null;
+  globalAttempts.lastAttemptAt = new Date().toISOString();
   const record = getAttemptRecord(user.username);
   record.count = 0;
   record.lockedUntil = null;
   record.lastAttemptAt = new Date().toISOString();
 
-  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}, counter reset`);
+  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}, GLOBAL counter reset`);
   lastLoggedInUser = user;
 
   const mockToken = `mock_jwt_${user.id}_${user.role}_${Date.now()}`;
@@ -480,33 +555,68 @@ app.post('/api/v1/auth/reset-attempts', (req, res) => {
       delete loginAttempts[trimmed];
       console.log(`[MOCK] Reset attempts for ${trimmed}`);
     }
-    // Also try email lookup
     Object.keys(loginAttempts).forEach(key => {
       if (key.toLowerCase() === trimmed.toLowerCase()) delete loginAttempts[key];
     });
-    res.json({ success: true, message: `Attempts reset for ${trimmed}`, timestamp: new Date().toISOString() });
+    // If resetting a user, also decrement global? For global counter, reset all when any user reset for testing
+    // For per-user reset, we keep global but for simplicity reset global if requested user was part of global
+    // User wants global same counter, so reset global when resetting any
+    if (globalAttempts.count > 0) {
+      globalAttempts.count = Math.max(0, globalAttempts.count - 1);
+      if (globalAttempts.count === 0) globalAttempts.lockedUntil = null;
+    }
+    res.json({ success: true, message: `Attempts reset for ${trimmed} (global now ${globalAttempts.count})`, timestamp: new Date().toISOString() });
   } else {
-    // Reset all
+    // Reset all - both global and per-user
     Object.keys(loginAttempts).forEach(k => delete loginAttempts[k]);
-    console.log(`[MOCK] Reset ALL attempts`);
-    res.json({ success: true, message: 'All attempts reset', timestamp: new Date().toISOString() });
+    globalAttempts.count = 0;
+    globalAttempts.lockedUntil = null;
+    globalAttempts.lastAttemptAt = null;
+    console.log(`[MOCK] Reset ALL attempts (global + per-user)`);
+    res.json({ success: true, message: 'All attempts reset (global + per-user)', timestamp: new Date().toISOString() });
   }
 });
 
 app.get('/api/v1/auth/attempts/:username', (req, res) => {
   const username = req.params.username;
   const record = loginAttempts[username] || { count: 0, lockedUntil: null, lastAttemptAt: null };
-  const remainingMs = record.lockedUntil ? Math.max(0, record.lockedUntil - Date.now()) : 0;
+  const globalRemainingMs = globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0;
+  const perUserRemainingMs = record.lockedUntil ? Math.max(0, record.lockedUntil - Date.now()) : 0;
+  const remainingMs = Math.max(globalRemainingMs, perUserRemainingMs);
+  const isGlobalLocked = globalRemainingMs > 0;
   res.json({
     success: true,
     data: {
       username,
-      failedAttempts: record.count,
-      remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
+      failedAttempts: globalAttempts.count, // GLOBAL as requested - same for username+password
+      perUserAttempts: record.count,
+      remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
       maxAttempts: MAX_ATTEMPTS,
       isLocked: remainingMs > 0,
-      lockedUntil: record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null,
+      isGlobalLocked,
+      lockedUntil: globalAttempts.lockedUntil ? new Date(globalAttempts.lockedUntil).toISOString() : (record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null),
       remainingSeconds: Math.ceil(remainingMs / 1000),
+      globalCount: globalAttempts.count,
+      isGlobal: true,
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/v1/auth/attempts', (req, res) => {
+  const globalRemainingMs = globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0;
+  res.json({
+    success: true,
+    data: {
+      failedAttempts: globalAttempts.count,
+      remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
+      maxAttempts: MAX_ATTEMPTS,
+      isLocked: globalRemainingMs > 0,
+      lockedUntil: globalAttempts.lockedUntil ? new Date(globalAttempts.lockedUntil).toISOString() : null,
+      remainingSeconds: Math.ceil(globalRemainingMs / 1000),
+      perUser: loginAttempts,
+      isGlobal: true,
+      message: 'GLOBAL counter - username+password share same count',
     },
     timestamp: new Date().toISOString(),
   });
