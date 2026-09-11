@@ -26,9 +26,19 @@ export class AuthService {
   }
 
   async validateUser(username: string, password: string) {
+    // Validate input presence for better UX
+    if (!username || username.trim() === '') {
+      throw new BadRequestException('Username is required. Please enter your username or email.');
+    }
+    if (!password || password.trim() === '') {
+      throw new BadRequestException('Password is required. Please enter your password.');
+    }
+
+    const trimmedUsername = username.trim();
+
     const user = await this.prisma.auth_users.findFirst({
       where: {
-        OR: [{ username }, { email: username }],
+        OR: [{ username: trimmedUsername }, { email: trimmedUsername }],
       },
       include: {
         primary_role: true,
@@ -39,20 +49,28 @@ export class AuthService {
       await this.auditService.log({
         action: 'LOGIN_FAILURE',
         entityType: 'Auth',
-        description: `Login failed - user not found: ${username}`,
+        description: `Login failed - user not found: ${trimmedUsername}`,
         status: 'Failure',
         errorMessage: 'User not found',
       });
-      throw new UnauthorizedException('Invalid credentials');
+      // More helpful message for UX - tell user what they entered and valid options
+      throw new UnauthorizedException(
+        `Username "${trimmedUsername}" not found. Please check spelling. Valid demo accounts: admin.system, susan.lee, james.wilson, maria.garcia, ahmed.hassan, jennifer.smith, david.kim, rachel.brown, patricia.johnson, michael.wong`,
+      );
     }
 
-    // Check lockout
+    // Check lockout - specific message
     if (user.locked_until && user.locked_until > new Date()) {
-      throw new ForbiddenException(`Account locked until ${user.locked_until.toISOString()}`);
+      const unlockTime = user.locked_until.toISOString();
+      throw new ForbiddenException(
+        `Account "${user.username}" is locked due to 5 failed attempts. Locked until ${unlockTime}. Please try again after 15 minutes or contact administrator.`,
+      );
     }
 
     if (user.status !== 'Active') {
-      throw new ForbiddenException(`Account status is ${user.status}`);
+      throw new ForbiddenException(
+        `Account "${user.username}" status is ${user.status}. Account is not active. Please contact HR administrator.`,
+      );
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
@@ -79,11 +97,19 @@ export class AuthService {
         username: user.username,
         action: 'LOGIN_FAILURE',
         entityType: 'Auth',
-        description: `Failed login attempt ${failedAttempts} for ${username}`,
+        description: `Failed login attempt ${failedAttempts} for ${trimmedUsername}`,
         status: 'Failure',
       });
 
-      throw new UnauthorizedException('Invalid credentials');
+      if (failedAttempts >= 5) {
+        throw new UnauthorizedException(
+          `Incorrect password for "${user.username}". Account locked after ${failedAttempts} failed attempts until ${lockedUntil?.toISOString()}. Demo password is Password123!`,
+        );
+      }
+
+      throw new UnauthorizedException(
+        `Incorrect password for user "${user.username}" (attempt ${failedAttempts}/5). Password must be Password123! for demo accounts. Hint: capital P, 123, ! at end. Check Caps Lock.`,
+      );
     }
 
     // Reset failed attempts on success

@@ -275,27 +275,68 @@ app.post('/api/v1/auth/login', (req, res) => {
 
   console.log(`[MOCK] Login attempt: username=${username}, password=${password ? '***' : 'empty'}`);
 
-  // Validate password - must be Password123!
-  if (!password || password !== 'Password123!') {
-    console.log(`[MOCK] Login FAILED for ${username}: invalid password`);
-    return res.status(401).json({
+  // Validate username presence
+  if (!username || typeof username !== 'string' || username.trim() === '') {
+    console.log(`[MOCK] Login FAILED: missing username`);
+    return res.status(400).json({
       success: false,
-      statusCode: 401,
-      error: 'UNAUTHORIZED',
-      message: 'Invalid credentials - password must be Password123! (MOCK validation)',
+      statusCode: 400,
+      error: 'BAD_REQUEST',
+      errorCode: 'USERNAME_REQUIRED',
+      message: 'Username is required. Please enter your username or email.',
       timestamp: new Date().toISOString(),
     });
   }
 
-  // Find user
-  const user = mockUsers[username];
+  // Validate password presence
+  if (!password || typeof password !== 'string' || password.trim() === '') {
+    console.log(`[MOCK] Login FAILED for ${username}: missing password`);
+    return res.status(400).json({
+      success: false,
+      statusCode: 400,
+      error: 'BAD_REQUEST',
+      errorCode: 'PASSWORD_REQUIRED',
+      message: 'Password is required. Please enter your password.',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Find user first - to give specific username error
+  const trimmedUsername = username.trim();
+  const user = mockUsers[trimmedUsername] || Object.values(mockUsers).find(u => u.email.toLowerCase() === trimmedUsername.toLowerCase());
+  
   if (!user) {
     console.log(`[MOCK] Login FAILED: user ${username} not found`);
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
-      message: `User ${username} not found. Valid users: ${Object.keys(mockUsers).join(', ')}`,
+      errorCode: 'USER_NOT_FOUND',
+      message: `Username "${trimmedUsername}" not found. Please check spelling. Valid demo accounts: ${Object.keys(mockUsers).join(', ')}`,
+      details: {
+        enteredUsername: trimmedUsername,
+        validUsernames: Object.keys(mockUsers),
+        hint: 'Username is case-sensitive. Use exact demo username like admin.system or susan.lee'
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // Validate password - must be Password123!
+  if (password !== 'Password123!') {
+    console.log(`[MOCK] Login FAILED for ${username}: invalid password`);
+    return res.status(401).json({
+      success: false,
+      statusCode: 401,
+      error: 'UNAUTHORIZED',
+      errorCode: 'INVALID_PASSWORD',
+      message: `Incorrect password for user "${user.username}". Password must be Password123! for all demo accounts.`,
+      details: {
+        username: user.username,
+        hint: 'Demo password is Password123! (capital P, numbers 123, exclamation mark)',
+        enteredPasswordLength: password.length,
+        commonMistakes: ['Check Caps Lock', 'Password is case-sensitive', 'Must include ! at end']
+      },
       timestamp: new Date().toISOString(),
     });
   }
@@ -316,7 +357,7 @@ app.post('/api/v1/auth/login', (req, res) => {
         accessToken: mockToken,
       },
     },
-    message: 'Login successful (MOCK FIXED)',
+    message: `Welcome ${user.fullName}! Login successful as ${user.role}`,
     timestamp: new Date().toISOString(),
   });
 });

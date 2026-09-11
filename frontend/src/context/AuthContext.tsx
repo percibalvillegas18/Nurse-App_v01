@@ -66,12 +66,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const response = await authApi.login(username, password);
       const { user: userData, tokens } = response.data.data;
 
+      if (!userData || !tokens?.accessToken) {
+        throw new Error('Invalid response from server - missing user or token');
+      }
+
       localStorage.setItem('accessToken', tokens.accessToken);
       localStorage.setItem('refreshToken', tokens.refreshToken);
       localStorage.setItem('sessionId', tokens.sessionId);
       localStorage.setItem('user', JSON.stringify(userData));
 
       setUser(userData);
+    } catch (error: any) {
+      // Ensure error has response data for UI to show
+      console.error('[AuthContext] Login failed:', error.response?.data || error.message);
+      throw error;
     } finally {
       setIsLoading(false);
     }

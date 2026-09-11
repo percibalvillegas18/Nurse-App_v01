@@ -32,10 +32,23 @@ apiClient.interceptors.request.use(
 );
 
 // Response interceptor - handle 401 refresh
+// FIXED: Don't redirect to /login for auth endpoints - let Login page show error message
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const requestUrl = originalRequest?.url || '';
+
+    // Skip refresh logic for auth endpoints - these should show error to user, not redirect
+    const isAuthEndpoint =
+      requestUrl.includes('/auth/login') ||
+      requestUrl.includes('/auth/refresh-token') ||
+      requestUrl.includes('/auth/logout');
+
+    if (isAuthEndpoint) {
+      // For login failures, just reject so Login page can show error message
+      return Promise.reject(error);
+    }
 
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
@@ -58,7 +71,10 @@ apiClient.interceptors.response.use(
           localStorage.removeItem('refreshToken');
           localStorage.removeItem('sessionId');
           localStorage.removeItem('user');
-          window.location.href = '/login';
+          // Only redirect if not already on login page
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
           return Promise.reject(refreshError);
         }
       } else {
@@ -66,7 +82,10 @@ apiClient.interceptors.response.use(
         localStorage.removeItem('refreshToken');
         localStorage.removeItem('sessionId');
         localStorage.removeItem('user');
-        window.location.href = '/login';
+        // Only redirect if not already on login page to avoid wiping error message
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
       }
     }
 
