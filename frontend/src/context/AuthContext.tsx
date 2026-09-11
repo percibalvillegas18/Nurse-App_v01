@@ -61,7 +61,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   const login = async (username: string, password: string) => {
-    setIsLoading(true);
+    // Don't set global isLoading - let Login component handle its own loading state
+    // Setting global isLoading causes PublicRoute to show full-screen spinner and hide form
     try {
       const response = await authApi.login(username, password);
       const { user: userData, tokens } = response.data.data;
@@ -80,8 +81,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Ensure error has response data for UI to show
       console.error('[AuthContext] Login failed:', error.response?.data || error.message);
       throw error;
-    } finally {
-      setIsLoading(false);
     }
   };
 
