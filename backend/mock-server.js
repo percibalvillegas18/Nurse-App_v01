@@ -157,6 +157,10 @@ const mockUsers = {
 
 // Track last logged in user for /me endpoint
 let lastLoggedInUser = mockUsers['admin.system'];
+// Refresh tokens actually issued by /auth/login, keyed to a user.
+// /auth/me is strict (valid bearer only); /auth/refresh-token only accepts
+// tokens in this map; logout invalidates them -> clean sign-out behavior.
+const issuedRefreshTokens = new Map(); // token -> userId
 
 // --- LOGIN ATTEMPT COUNTER (5 attempts -> 10 min lock) - GLOBAL COUNTER (user requested) ---
 const MAX_ATTEMPTS = 5;
@@ -527,6 +531,8 @@ app.post('/api/v1/auth/login', (req, res) => {
   lastLoggedInUser = user;
 
   const mockToken = `mock_jwt_${user.id}_${user.role}_${Date.now()}`;
+  const mockRefreshToken = `mock_refresh_${user.id}_${Date.now()}`;
+  issuedRefreshTokens.set(mockRefreshToken, user.id);
 
   res.json({
     success: true,
@@ -536,6 +542,7 @@ app.post('/api/v1/auth/login', (req, res) => {
       tokens: {
         ...mockTokens,
         accessToken: mockToken,
+        refreshToken: mockRefreshToken,
       },
     },
     message: `Welcome ${user.fullName}! Login successful as ${user.role}`,
@@ -544,7 +551,16 @@ app.post('/api/v1/auth/login', (req, res) => {
 });
 
 app.post('/api/v1/auth/logout', (req, res) => {
-  console.log(`[MOCK] Logout for user ${lastLoggedInUser.username}`);
+  // Invalidate every refresh token belonging to the caller (if identifiable)
+  const authHeader = req.headers.authorization || '';
+  const match = authHeader.replace('Bearer ', '').match(/mock_jwt_(\d+)_/);
+  const userId = match ? parseInt(match[1], 10) : null;
+  if (userId !== null) {
+    for (const [token, uid] of issuedRefreshTokens) {
+      if (uid === userId) issuedRefreshTokens.delete(token);
+    }
+  }
+  console.log(`[MOCK] Logout for user ${lastLoggedInUser.username}${userId !== null ? ' (refresh tokens invalidated)' : ''}`);
   res.json({ success: true, message: 'Logout successful (MOCK)', timestamp: new Date().toISOString() });
 });
 
@@ -624,30 +640,45 @@ app.get('/api/v1/auth/attempts', (req, res) => {
 });
 
 app.post('/api/v1/auth/refresh-token', (req, res) => {
+  const { refreshToken } = req.body || {};
+  const userId = refreshToken ? issuedRefreshTokens.get(refreshToken) : undefined;
+  const user = userId ? Object.values(mockUsers).find((u) => u.id === userId) : null;
+  if (!user) {
+    console.log('[MOCK] Refresh-token REJECTED (unknown/invalidated token)');
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or expired refresh token',
+      timestamp: new Date().toISOString(),
+    });
+  }
+  console.log(`[MOCK] Refresh-token OK for ${user.username}`);
   res.json({
     success: true,
-    data: { accessToken: `mock_jwt_${lastLoggedInUser.id}_${lastLoggedInUser.role}_${Date.now()}`, expiresIn: 3600 },
+    data: { accessToken: `mock_jwt_${user.id}_${user.role}_${Date.now()}`, refreshToken, expiresIn: 3600 },
     message: 'Token refreshed (MOCK)',
     timestamp: new Date().toISOString(),
   });
 });
 
 app.get('/api/v1/auth/me', (req, res) => {
-  // Try to parse user from Authorization header mock token
-  const authHeader = req.headers.authorization;
-  let user = lastLoggedInUser;
+  // STRICT: identity comes from the bearer token only - no catch-all fallback,
+  // otherwise the frontend thinks everyone is already signed in (login page
+  // never shows).
+  const unauth = (message) =>
+    res.status(401).json({ success: false, error: 'Unauthorized', message, timestamp: new Date().toISOString() });
 
-  if (authHeader) {
-    const token = authHeader.replace('Bearer ', '');
-    // Parse mock_jwt_{id}_{role}_{timestamp}
-    const match = token.match(/mock_jwt_(\d+)_([A-Z_]+)_/);
-    if (match) {
-      const userId = parseInt(match[1], 10);
-      const foundUser = Object.values(mockUsers).find(u => u.id === userId);
-      if (foundUser) {
-        user = foundUser;
-      }
-    }
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    console.log('[MOCK] /auth/me 401 - no Authorization header');
+    return unauth('Not authenticated - missing access token');
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  const match = token.match(/mock_jwt_(\d+)_([A-Z_]+)_/);
+  const user = match ? Object.values(mockUsers).find((u) => u.id === parseInt(match[1], 10)) : null;
+  if (!user) {
+    console.log('[MOCK] /auth/me 401 - invalid/expired token');
+    return unauth('Invalid or expired token');
   }
 
   console.log(`[MOCK] /auth/me returning user ${user.username} with role ${user.role}`);
