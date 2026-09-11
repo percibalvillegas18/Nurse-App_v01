@@ -115,13 +115,13 @@ export class RbacService {
 
     if (accessibleOnly && userId) {
       // Try cache for accessible menus
-      const cached = await this.redisService.getAccessibleMenus<any[]>(userId);
+      const cached = (await this.redisService.getAccessibleMenus(userId)) as any[] | null;
       if (cached) {
         return cached;
       }
 
       // Filter by user's accessible menus via role_menu_access with multi-role OR logic
-      const accessibleMenuIds = await this.prisma.$queryRawUnsafe<{ menu_id: number }[]>(
+      const accessibleMenuIds = (await this.prisma.$queryRawUnsafe(
         `
         SELECT DISTINCT m.id as menu_id
         FROM rbac.menus m
@@ -150,7 +150,7 @@ export class RbacService {
           AND m.status = 'Active'
         `,
         userId,
-      );
+      )) as { menu_id: number }[];
       const allowedIds = new Set(accessibleMenuIds.map((r) => r.menu_id));
       menus = menus.filter((m) => allowedIds.has(m.id));
     }

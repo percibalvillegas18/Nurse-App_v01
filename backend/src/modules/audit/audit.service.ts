@@ -141,10 +141,10 @@ export class AuditService {
     ]);
 
     // Group by action
-    const byAction = await this.prisma.$queryRawUnsafe<any[]>(
+    const byAction = (await this.prisma.$queryRawUnsafe(
       `SELECT action, COUNT(*) as count FROM audit.audit_logs WHERE created_at >= $1 GROUP BY action ORDER BY count DESC LIMIT 10`,
       since,
-    );
+    )) as any[];
 
     return {
       period,

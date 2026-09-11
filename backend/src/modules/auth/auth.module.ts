@@ -15,7 +15,7 @@ import { AuditModule } from '../audit/audit.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get('JWT_SECRET'),
+        secret: configService.get('JWT_SECRET') || 'dev-secret-key-change-in-production-please-use-64-chars-min',
         signOptions: {
           expiresIn: configService.get('JWT_EXPIRY', '3600s'),
         },

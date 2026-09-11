@@ -62,12 +62,12 @@ export class EffectiveAccessService {
 
     // Try cache first
     try {
-      const cached = await this.redisService.getAccessDecision<AccessDecision>(
+      const cached = await this.redisService.getAccessDecision(
         userId,
         menuCode,
         permissionCode,
         resourceId,
-      );
+      ) as AccessDecision | null;
 
       if (cached) {
         this.logger.debug(`Cache HIT for ${cacheKey} -> ${cached.decision}`);
@@ -79,20 +79,20 @@ export class EffectiveAccessService {
       }
 
       this.logger.debug(`Cache MISS for ${cacheKey}`);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Cache read failed for ${cacheKey}: ${error.message}, falling back to DB`);
     }
 
     // Cache miss - evaluate via DB
     let decision: AccessDecision;
     try {
-      const raw = await this.prisma.$queryRawUnsafe<any[]>(
+      const raw = (await this.prisma.$queryRawUnsafe(
         `SELECT * FROM rbac.evaluate_access($1, $2, $3, $4)`,
         userId,
         menuCode,
         permissionCode,
         resourceId || null,
-      );
+      )) as any[];
 
       const row = raw[0];
 
@@ -127,12 +127,12 @@ export class EffectiveAccessService {
 
         // Track user roles for precise invalidation
         if (roles.length > 0) {
-          await this.redisService.trackUserRoles(userId, roles).catch((e) =>
+          await this.redisService.trackUserRoles(userId, roles).catch((e: any) =>
             this.logger.warn(`Failed to track roles for user ${userId}: ${e.message}`),
           );
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `evaluateAccess DB failed for user=${userId}, menu=${menuCode}, perm=${permissionCode}: ${error.message}`,
         error.stack,
@@ -162,7 +162,7 @@ export class EffectiveAccessService {
         decision,
         decision.cacheTtl,
       );
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Cache write failed for ${cacheKey}: ${error.message}`);
     }
 
@@ -174,7 +174,7 @@ export class EffectiveAccessService {
    * This is the FIX for multi-role support
    */
   async getUserActiveRoleCodes(userId: number): Promise<string[]> {
-    const rows = await this.prisma.$queryRawUnsafe<{ code: string }[]>(
+    const rows = (await this.prisma.$queryRawUnsafe(
       `
       SELECT hr.code
       FROM auth.user_role_assignments ura
@@ -191,7 +191,7 @@ export class EffectiveAccessService {
       WHERE u.id = $1 AND u.status = 'Active' AND hr.status = 'Active'
       `,
       userId,
-    );
+    )) as { code: string }[];
     return rows.map((r) => r.code);
   }
 
@@ -203,28 +203,28 @@ export class EffectiveAccessService {
   async getUserFullAccess(userId: number): Promise<FullAccessRow[]> {
     // Try cache
     try {
-      const cached = await this.redisService.getFullAccess<FullAccessRow[]>(userId);
+      const cached = (await this.redisService.getFullAccess(userId)) as FullAccessRow[] | null;
       if (cached) {
         this.logger.debug(`Cache HIT for full access user ${userId}`);
         return cached;
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Full access cache read failed for user ${userId}: ${error.message}`);
     }
 
     try {
-      const rows = await this.prisma.$queryRawUnsafe<FullAccessRow[]>(
+      const rows = (await this.prisma.$queryRawUnsafe(
         `SELECT * FROM rbac.get_user_full_access($1)`,
         userId,
-      );
+      )) as FullAccessRow[];
 
       // Cache result
-      await this.redisService.setFullAccess(userId, rows, 300).catch((e) =>
+      await this.redisService.setFullAccess(userId, rows, 300).catch((e: any) =>
         this.logger.warn(`Failed to cache full access for user ${userId}: ${e.message}`),
       );
 
       return rows;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`getUserFullAccess failed for user=${userId}: ${error.message}`);
       throw error;
     }
@@ -236,12 +236,12 @@ export class EffectiveAccessService {
   async getAccessibleMenus(userId: number) {
     // Try cache
     try {
-      const cached = await this.redisService.getAccessibleMenus<any[]>(userId);
+      const cached = (await this.redisService.getAccessibleMenus(userId)) as any[] | null;
       if (cached) {
         this.logger.debug(`Cache HIT for accessible menus user ${userId}`);
         return cached;
       }
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Menus cache read failed for user ${userId}: ${error.message}`);
     }
 
@@ -270,7 +270,7 @@ export class EffectiveAccessService {
     const menus = Array.from(menuMap.values()).filter((m) => m.isAccessible);
 
     // Cache menus
-    await this.redisService.setAccessibleMenus(userId, menus, 300).catch((e) =>
+    await this.redisService.setAccessibleMenus(userId, menus, 300).catch((e: any) =>
       this.logger.warn(`Failed to cache menus for user ${userId}: ${e.message}`),
     );
 
@@ -290,16 +290,16 @@ export class EffectiveAccessService {
     newValue?: boolean,
   ) {
     try {
-      const rows = await this.prisma.$queryRawUnsafe<any[]>(
+      const rows = (await this.prisma.$queryRawUnsafe(
         `SELECT * FROM rbac.preview_access_change($1, $2, $3, $4, $5)`,
         userId,
         changeType,
         menuId,
         permissionId || null,
         newValue ?? null,
-      );
+      )) as any[];
       return rows[0];
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`previewAccessChange failed: ${error.message}`);
       throw error;
     }
