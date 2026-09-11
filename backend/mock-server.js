@@ -472,6 +472,46 @@ app.post('/api/v1/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Logout successful (MOCK)', timestamp: new Date().toISOString() });
 });
 
+app.post('/api/v1/auth/reset-attempts', (req, res) => {
+  const { username } = req.body || {};
+  if (username) {
+    const trimmed = username.trim();
+    if (loginAttempts[trimmed]) {
+      delete loginAttempts[trimmed];
+      console.log(`[MOCK] Reset attempts for ${trimmed}`);
+    }
+    // Also try email lookup
+    Object.keys(loginAttempts).forEach(key => {
+      if (key.toLowerCase() === trimmed.toLowerCase()) delete loginAttempts[key];
+    });
+    res.json({ success: true, message: `Attempts reset for ${trimmed}`, timestamp: new Date().toISOString() });
+  } else {
+    // Reset all
+    Object.keys(loginAttempts).forEach(k => delete loginAttempts[k]);
+    console.log(`[MOCK] Reset ALL attempts`);
+    res.json({ success: true, message: 'All attempts reset', timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/v1/auth/attempts/:username', (req, res) => {
+  const username = req.params.username;
+  const record = loginAttempts[username] || { count: 0, lockedUntil: null, lastAttemptAt: null };
+  const remainingMs = record.lockedUntil ? Math.max(0, record.lockedUntil - Date.now()) : 0;
+  res.json({
+    success: true,
+    data: {
+      username,
+      failedAttempts: record.count,
+      remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
+      maxAttempts: MAX_ATTEMPTS,
+      isLocked: remainingMs > 0,
+      lockedUntil: record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null,
+      remainingSeconds: Math.ceil(remainingMs / 1000),
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.post('/api/v1/auth/refresh-token', (req, res) => {
   res.json({
     success: true,

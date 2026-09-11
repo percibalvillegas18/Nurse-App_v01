@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Form, Input, Button, Card, Typography, Alert, Divider, Space, message, Progress, Statistic } from 'antd';
-import { UserOutlined, LockOutlined, SafetyOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, SafetyOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { apiClient } from '../api/client';
 
-const { Title, Text, Countdown } = Typography;
+const { Title, Text } = Typography;
 
 const LAST_ATTEMPT_KEY = 'lastLoginAttempt';
-const ATTEMPT_INFO_KEY = 'loginAttemptInfo';
+const ATTEMPT_INFO_KEY = 'loginAttemptInfoMap'; // Now stores map username -> info
 const DEFAULT_CREDENTIALS = { username: 'admin.system', password: 'Password123!' };
 const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MIN = 10;
@@ -30,21 +31,31 @@ interface AttemptInfo {
   lockedUntil?: string;
   remainingSeconds?: number;
   isLocked?: boolean;
+  username?: string;
 }
+
+type AttemptMap = Record<string, AttemptInfo>;
 
 export const Login: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [genericError, setGenericError] = useState<string | null>(null);
-  const [attemptInfo, setAttemptInfo] = useState<AttemptInfo | null>(() => {
+  const [attemptMap, setAttemptMap] = useState<AttemptMap>(() => {
     try {
       const saved = localStorage.getItem(ATTEMPT_INFO_KEY);
-      return saved ? JSON.parse(saved) : null;
+      return saved ? JSON.parse(saved) : {};
     } catch {
-      return null;
+      return {};
     }
   });
-  const [lockCountdown, setLockCountdown] = useState<number>(0); // seconds remaining
+  const [currentUsername, setCurrentUsername] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
+      if (saved) return JSON.parse(saved).username || DEFAULT_CREDENTIALS.username;
+    } catch {}
+    return DEFAULT_CREDENTIALS.username;
+  });
+  const [lockCountdown, setLockCountdown] = useState<number>(0);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const [lastAttempt, setLastAttempt] = useState<{ username: string; password: string } | null>(() => {
     try {
@@ -57,7 +68,11 @@ export const Login: React.FC = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  // Restore last attempt on mount
+  // Get attempt info for current username
+  const attemptInfo = attemptMap[currentUsername] || null;
+  const isLocked = lockCountdown > 0 || attemptInfo?.isLocked;
+
+  // Restore on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
@@ -66,29 +81,51 @@ export const Login: React.FC = () => {
         if (parsed.username) {
           form.setFieldsValue(parsed);
           setLastAttempt(parsed);
+          setCurrentUsername(parsed.username);
         }
       }
       const attemptSaved = localStorage.getItem(ATTEMPT_INFO_KEY);
       if (attemptSaved) {
-        const parsedAttempt = JSON.parse(attemptSaved);
-        if (parsedAttempt.lockedUntil) {
-          const lockedUntilTime = new Date(parsedAttempt.lockedUntil).getTime();
-          const remaining = Math.max(0, Math.ceil((lockedUntilTime - Date.now()) / 1000));
+        const map: AttemptMap = JSON.parse(attemptSaved);
+        // Check if current user's lock expired
+        const currentInfo = map[currentUsername];
+        if (currentInfo?.lockedUntil) {
+          const remaining = Math.max(0, Math.ceil((new Date(currentInfo.lockedUntil).getTime() - Date.now()) / 1000));
           if (remaining > 0) {
-            setAttemptInfo(parsedAttempt);
             setLockCountdown(remaining);
             startCountdown(remaining);
           } else {
-            // Lock expired, clear
-            localStorage.removeItem(ATTEMPT_INFO_KEY);
-            setAttemptInfo(null);
+            // Expired, clear for this user
+            delete map[currentUsername];
+            localStorage.setItem(ATTEMPT_INFO_KEY, JSON.stringify(map));
+            setAttemptMap(map);
           }
-        } else {
-          setAttemptInfo(parsedAttempt);
         }
       }
     } catch {}
   }, [form]);
+
+  // When currentUsername changes, update countdown for that user
+  useEffect(() => {
+    const info = attemptMap[currentUsername];
+    if (info?.lockedUntil) {
+      const remaining = Math.max(0, Math.ceil((new Date(info.lockedUntil).getTime() - Date.now()) / 1000));
+      if (remaining > 0) {
+        setLockCountdown(remaining);
+        startCountdown(remaining);
+      } else {
+        setLockCountdown(0);
+        // Clear expired lock for this user
+        const newMap = { ...attemptMap };
+        delete newMap[currentUsername];
+        setAttemptMap(newMap);
+        persistAttemptMap(newMap);
+      }
+    } else {
+      setLockCountdown(0);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+    }
+  }, [currentUsername]);
 
   const startCountdown = (seconds: number) => {
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -97,11 +134,15 @@ export const Login: React.FC = () => {
       setLockCountdown(prev => {
         if (prev <= 1) {
           if (countdownRef.current) clearInterval(countdownRef.current);
-          // Unlock
-          localStorage.removeItem(ATTEMPT_INFO_KEY);
-          setAttemptInfo(null);
+          // Unlock for current user
+          setAttemptMap(prevMap => {
+            const newMap = { ...prevMap };
+            delete newMap[currentUsername];
+            persistAttemptMap(newMap);
+            return newMap;
+          });
           setGenericError(null);
-          message.success('Lock expired - you can try again now');
+          message.success(`Lock expired for ${currentUsername} - you can try again`);
           return 0;
         }
         return prev - 1;
@@ -121,31 +162,29 @@ export const Login: React.FC = () => {
     } catch {}
   };
 
-  const persistAttemptInfo = (info: AttemptInfo | null) => {
+  const persistAttemptMap = (map: AttemptMap) => {
     try {
-      if (info) {
-        localStorage.setItem(ATTEMPT_INFO_KEY, JSON.stringify(info));
-      } else {
-        localStorage.removeItem(ATTEMPT_INFO_KEY);
-      }
+      localStorage.setItem(ATTEMPT_INFO_KEY, JSON.stringify(map));
     } catch {}
   };
 
   const onValuesChange = (_changed: any, allValues: { username: string; password: string }) => {
     persistAttempt(allValues);
+    if (allValues.username) {
+      setCurrentUsername(allValues.username);
+    }
     if (_changed.username !== undefined) {
       form.setFields([{ name: 'username', errors: [] }]);
     }
     if (_changed.password !== undefined) {
       form.setFields([{ name: 'password', errors: [] }]);
     }
-    if (genericError && !attemptInfo?.isLocked) setGenericError(null);
+    if (genericError && !isLocked) setGenericError(null);
   };
 
   const onFinish = async (values: { username: string; password: string }) => {
-    // Check if locked
     if (lockCountdown > 0) {
-      message.error(`Account locked - wait ${Math.ceil(lockCountdown / 60)} min (${lockCountdown}s)`);
+      message.error(`Account ${values.username} locked - wait ${Math.ceil(lockCountdown / 60)} min (${lockCountdown}s)`);
       return;
     }
 
@@ -157,15 +196,24 @@ export const Login: React.FC = () => {
     ]);
     persistAttempt(values);
     setLastAttempt({ ...values });
+    setCurrentUsername(values.username);
     
     try {
       await login(values.username, values.password);
       message.success(`Welcome ${values.username}!`);
-      // Reset attempt counter on success
-      persistAttemptInfo(null);
-      setAttemptInfo(null);
+      // Reset counter for this user on success
+      setAttemptMap(prev => {
+        const newMap = { ...prev };
+        delete newMap[values.username];
+        persistAttemptMap(newMap);
+        return newMap;
+      });
       setLockCountdown(0);
-      localStorage.removeItem(ATTEMPT_INFO_KEY);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      // Reset backend counter too
+      try {
+        await apiClient.post('/auth/reset-attempts', { username: values.username });
+      } catch {}
       persistAttempt(values);
       navigate('/dashboard');
     } catch (err: any) {
@@ -179,84 +227,69 @@ export const Login: React.FC = () => {
       const lowerMsg = String(rawMessage).toLowerCase();
       const isUserNotFound = errorCode === 'USER_NOT_FOUND' || lowerMsg.includes('not found');
       const isInvalidPassword = errorCode === 'INVALID_PASSWORD' || lowerMsg.includes('incorrect password');
-      const isLocked = errorCode === 'ACCOUNT_LOCKED' || err.response?.status === 423 || lowerMsg.includes('locked');
+      const isLockedErr = errorCode === 'ACCOUNT_LOCKED' || err.response?.status === 423 || lowerMsg.includes('locked');
       const isInactive = lowerMsg.includes('inactive') || lowerMsg.includes('suspended');
 
-      // Extract attempt info from backend details
-      const failedAttempts = details.failedAttempts || details.attempt || 0;
-      const remainingAttempts = details.remainingAttempts ?? (MAX_ATTEMPTS - failedAttempts);
+      // Use backend's failedAttempts if provided, otherwise increment local per-user counter
+      let failedAttempts = details.failedAttempts;
+      if (failedAttempts === undefined || failedAttempts === 0) {
+        // Backend didn't provide count (real backend for USER_NOT_FOUND doesn't count), use local per-user
+        const existing = attemptMap[values.username];
+        failedAttempts = (existing?.failedAttempts || 0) + 1;
+      }
+      const remainingAttempts = details.remainingAttempts ?? Math.max(0, MAX_ATTEMPTS - failedAttempts);
       const maxAttempts = details.maxAttempts || MAX_ATTEMPTS;
       const lockedUntil = details.lockedUntil;
       const remainingSeconds = details.remainingSeconds || details.retryAfter || 0;
 
       const newAttemptInfo: AttemptInfo = {
-        failedAttempts: failedAttempts || (attemptInfo ? attemptInfo.failedAttempts + 1 : 1),
-        remainingAttempts: remainingAttempts >= 0 ? remainingAttempts : Math.max(0, MAX_ATTEMPTS - (failedAttempts || 1)),
+        failedAttempts,
+        remainingAttempts,
         maxAttempts,
         lockedUntil,
         remainingSeconds,
-        isLocked,
+        isLocked: isLockedErr || failedAttempts >= MAX_ATTEMPTS,
+        username: values.username,
       };
 
-      // If we have details, use them, else increment local
-      if (failedAttempts) {
-        setAttemptInfo(newAttemptInfo);
-        persistAttemptInfo(newAttemptInfo);
-      } else if (!isLocked) {
-        // Increment local counter if backend didn't provide
-        const currentFails = (attemptInfo?.failedAttempts || 0) + 1;
-        const localInfo: AttemptInfo = {
-          failedAttempts: currentFails,
-          remainingAttempts: Math.max(0, MAX_ATTEMPTS - currentFails),
-          maxAttempts: MAX_ATTEMPTS,
-        };
-        if (currentFails >= MAX_ATTEMPTS) {
-          const lockUntil = new Date(Date.now() + LOCK_DURATION_MIN * 60 * 1000).toISOString();
-          localInfo.lockedUntil = lockUntil;
-          localInfo.remainingSeconds = LOCK_DURATION_MIN * 60;
-          localInfo.isLocked = true;
-          setLockCountdown(LOCK_DURATION_MIN * 60);
-          startCountdown(LOCK_DURATION_MIN * 60);
-        }
-        setAttemptInfo(localInfo);
-        persistAttemptInfo(localInfo);
-      }
+      // Save per-user
+      setAttemptMap(prev => {
+        const newMap = { ...prev, [values.username]: newAttemptInfo };
+        persistAttemptMap(newMap);
+        return newMap;
+      });
 
-      if (isLocked) {
-        const secs = remainingSeconds || lockCountdown || LOCK_DURATION_MIN * 60;
+      if (isLockedErr || failedAttempts >= MAX_ATTEMPTS) {
+        const secs = remainingSeconds || LOCK_DURATION_MIN * 60;
         setLockCountdown(secs);
         startCountdown(secs);
         const mins = Math.ceil(secs / 60);
-        const friendly = `Account locked after ${failedAttempts || MAX_ATTEMPTS}/${MAX_ATTEMPTS} failed attempts. Wait ${mins} min (${secs}s) until ${lockedUntil ? new Date(lockedUntil).toLocaleTimeString() : '10 min'}. Counter resets after.`;
+        const friendly = `Account "${values.username}" locked after ${failedAttempts}/${MAX_ATTEMPTS} fails. Wait ${mins} min (${secs}s) until ${lockedUntil ? new Date(lockedUntil).toLocaleTimeString() : `${LOCK_DURATION_MIN} min`}.`;
         setGenericError(friendly);
         message.error(friendly, 6);
-        form.setFieldsValue(values);
       } else if (isUserNotFound) {
-        const msg = `Username "${values.username}" not found. Attempt ${newAttemptInfo.failedAttempts}/${MAX_ATTEMPTS}, ${newAttemptInfo.remainingAttempts} left before ${LOCK_DURATION_MIN}-min lock.`;
+        const msg = `Username "${values.username}" not found. Attempt ${failedAttempts}/${MAX_ATTEMPTS}, ${remainingAttempts} left before ${LOCK_DURATION_MIN}-min lock.`;
         form.setFields([{ name: 'username', errors: [msg] }]);
-        form.setFieldsValue({ username: values.username, password: values.password });
         message.warning(msg, 4);
       } else if (isInvalidPassword) {
-        const msg = `Incorrect password for "${values.username}". Attempt ${newAttemptInfo.failedAttempts}/${MAX_ATTEMPTS}, ${newAttemptInfo.remainingAttempts} left before lock.`;
+        const msg = `Incorrect password for "${values.username}". Attempt ${failedAttempts}/${MAX_ATTEMPTS}, ${remainingAttempts} left.`;
         form.setFields([{ name: 'password', errors: [msg] }]);
-        form.setFieldsValue({ username: values.username, password: values.password });
         message.warning(msg, 4);
       } else if (isInactive) {
         setGenericError(`${rawMessage}. Contact HR.`);
         message.error(String(rawMessage), 5);
-        form.setFieldsValue(values);
       } else {
         if (lowerMsg.includes('password')) {
           form.setFields([{ name: 'password', errors: [String(rawMessage)] }]);
         } else if (lowerMsg.includes('username') || lowerMsg.includes('user')) {
           form.setFields([{ name: 'username', errors: [String(rawMessage)] }]);
         } else {
-          setGenericError(`${rawMessage} (attempt ${newAttemptInfo.failedAttempts}/${MAX_ATTEMPTS})`);
+          setGenericError(`${rawMessage} (attempt ${failedAttempts}/${MAX_ATTEMPTS})`);
           message.error(String(rawMessage), 5);
         }
-        form.setFieldsValue(values);
       }
 
+      form.setFieldsValue(values);
       persistAttempt(values);
       setLastAttempt({ ...values });
     } finally {
@@ -265,8 +298,8 @@ export const Login: React.FC = () => {
   };
 
   const fillDemoAccount = (username: string) => {
-    if (lockCountdown > 0) {
-      message.warning(`Locked - wait ${Math.ceil(lockCountdown/60)} min`);
+    if (attemptMap[username]?.isLocked || (username === currentUsername && lockCountdown > 0)) {
+      message.warning(`${username} locked - wait ${Math.ceil(lockCountdown/60)} min or reset`);
       return;
     }
     const newValues = { username, password: 'Password123!' };
@@ -277,10 +310,16 @@ export const Login: React.FC = () => {
     ]);
     persistAttempt(newValues);
     setLastAttempt(newValues);
+    setCurrentUsername(username);
     setGenericError(null);
   };
 
-  const clearAndResetDefault = () => {
+  const clearAndResetDefault = async () => {
+    // Reset backend counters for current user and all
+    try {
+      await apiClient.post('/auth/reset-attempts', { username: currentUsername });
+      await apiClient.post('/auth/reset-attempts', {}); // reset all for testing
+    } catch {}
     localStorage.removeItem(LAST_ATTEMPT_KEY);
     localStorage.removeItem(ATTEMPT_INFO_KEY);
     form.setFieldsValue(DEFAULT_CREDENTIALS);
@@ -289,10 +328,32 @@ export const Login: React.FC = () => {
       { name: 'password', errors: [] },
     ]);
     setLastAttempt(DEFAULT_CREDENTIALS);
-    setAttemptInfo(null);
+    setCurrentUsername(DEFAULT_CREDENTIALS.username);
+    setAttemptMap({});
     setLockCountdown(0);
     if (countdownRef.current) clearInterval(countdownRef.current);
     setGenericError(null);
+    message.success('Reset: counters cleared for all users, form reset to admin.system');
+  };
+
+  const resetCurrentUserAttempts = async () => {
+    try {
+      await apiClient.post('/auth/reset-attempts', { username: currentUsername });
+    } catch {}
+    setAttemptMap(prev => {
+      const newMap = { ...prev };
+      delete newMap[currentUsername];
+      persistAttemptMap(newMap);
+      return newMap;
+    });
+    setLockCountdown(0);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setGenericError(null);
+    form.setFields([
+      { name: 'username', errors: [] },
+      { name: 'password', errors: [] },
+    ]);
+    message.success(`Attempts reset for ${currentUsername}`);
   };
 
   const formatCountdown = (seconds: number) => {
@@ -302,7 +363,6 @@ export const Login: React.FC = () => {
   };
 
   const attemptPercent = attemptInfo ? Math.min(100, (attemptInfo.failedAttempts / MAX_ATTEMPTS) * 100) : 0;
-  const isLocked = lockCountdown > 0 || attemptInfo?.isLocked;
 
   return (
     <div
@@ -317,32 +377,38 @@ export const Login: React.FC = () => {
     >
       <Card
         style={{
-          width: 460,
+          width: 480,
           boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
           borderRadius: 16,
         }}
       >
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          <SafetyOutlined style={{ fontSize: 40, color: '#1677ff', marginBottom: 8 }} />
+          <SafetyOutlined style={{ fontSize: 38, color: '#1677ff', marginBottom: 6 }} />
           <Title level={4} style={{ marginBottom: 2 }}>
             Nurse-App
           </Title>
-          <Text type="secondary" style={{ fontSize: 11 }}>Hospital Workforce Management - RBAC Secured</Text>
-          {lastAttempt && lastAttempt.username !== DEFAULT_CREDENTIALS.username && (
-            <div style={{ marginTop: 6, fontSize: 10, color: '#1677ff', background: '#f0f5ff', padding: '3px 8px', borderRadius: 10, display: 'inline-block' }}>
-              <InfoCircleOutlined style={{ marginRight: 4 }} />
-              Last: <strong>{lastAttempt.username}</strong> (preserved)
-            </div>
-          )}
+          <Text type="secondary" style={{ fontSize: 11 }}>Hospital Workforce - RBAC Secured - 5 attempts / 10 min lock</Text>
+          <div style={{ marginTop: 6, display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {lastAttempt && (
+              <span style={{ fontSize: 10, color: '#1677ff', background: '#f0f5ff', padding: '2px 8px', borderRadius: 10 }}>
+                <InfoCircleOutlined style={{ marginRight: 3 }} />
+                Last: {lastAttempt.username}
+              </span>
+            )}
+            {attemptInfo && (
+              <span style={{ fontSize: 10, color: isLocked ? '#ff4d4f' : '#faad14', background: isLocked ? '#fff2f0' : '#fffbe6', padding: '2px 8px', borderRadius: 10, border: `1px solid ${isLocked ? '#ffccc7' : '#ffe58f'}` }}>
+                {attemptInfo.username}: {attemptInfo.failedAttempts}/{MAX_ATTEMPTS} {isLocked ? 'LOCKED' : `(${attemptInfo.remainingAttempts} left)`}
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* Attempt Counter - 5 attempts -> 10 min lock */}
         {attemptInfo && (
           <div style={{ marginBottom: 12, padding: '8px 12px', background: isLocked ? '#fff2f0' : attemptInfo.failedAttempts >= 3 ? '#fffbe6' : '#f6ffed', border: `1px solid ${isLocked ? '#ffccc7' : attemptInfo.failedAttempts >= 3 ? '#ffe58f' : '#b7eb8f'}`, borderRadius: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <Text strong style={{ fontSize: 11 }}>
                 <WarningOutlined style={{ marginRight: 4, color: isLocked ? '#ff4d4f' : '#faad14' }} />
-                Login Attempts: {attemptInfo.failedAttempts}/{MAX_ATTEMPTS}
+                {attemptInfo.username} - Attempts: {attemptInfo.failedAttempts}/{MAX_ATTEMPTS}
               </Text>
               <Text type="secondary" style={{ fontSize: 10 }}>
                 {isLocked ? 'LOCKED' : `${attemptInfo.remainingAttempts} left`}
@@ -355,10 +421,12 @@ export const Login: React.FC = () => {
             </div>
             {isLocked && lockCountdown > 0 && (
               <div style={{ marginTop: 8, textAlign: 'center', background: '#fff', padding: 8, borderRadius: 6, border: '1px dashed #ff4d4f' }}>
-                <Statistic title="Time until unlock" value={formatCountdown(lockCountdown)} prefix={<ClockCircleOutlined />} valueStyle={{ fontSize: 20, color: '#ff4d4f', fontWeight: 'bold' }} />
-                <Text type="secondary" style={{ fontSize: 10 }}>Wait {Math.ceil(lockCountdown/60)} min ({lockCountdown}s) - Counter resets after</Text>
+                <Statistic title={`Unlock in - ${attemptInfo.username}`} value={formatCountdown(lockCountdown)} prefix={<ClockCircleOutlined />} valueStyle={{ fontSize: 22, color: '#ff4d4f', fontWeight: 'bold' }} />
+                <Text type="secondary" style={{ fontSize: 10 }}>Wait {Math.ceil(lockCountdown/60)} min ({lockCountdown}s) - Counter resets after lock expires</Text>
                 <br />
-                <Text type="secondary" style={{ fontSize: 9 }}>Locked until: {attemptInfo.lockedUntil ? new Date(attemptInfo.lockedUntil).toLocaleTimeString() : '10 min from now'}</Text>
+                <Button size="small" icon={<ReloadOutlined />} onClick={resetCurrentUserAttempts} style={{ marginTop: 6, fontSize: 10 }}>
+                  Reset {currentUsername} attempts (for testing)
+                </Button>
               </div>
             )}
           </div>
@@ -366,7 +434,7 @@ export const Login: React.FC = () => {
 
         {genericError && (
           <Alert
-            message={isLocked ? `Account Locked - Wait ${LOCK_DURATION_MIN} min` : "Authentication Issue"}
+            message={isLocked ? `Account ${currentUsername} Locked - Wait ${LOCK_DURATION_MIN} min` : "Authentication Issue"}
             description={<div style={{ whiteSpace: 'pre-line', fontSize: 11 }}>{genericError}</div>}
             type={isLocked ? "error" : "warning"}
             showIcon
@@ -407,44 +475,53 @@ export const Login: React.FC = () => {
 
           <Form.Item style={{ marginBottom: 8 }}>
             <Button type="primary" htmlType="submit" loading={loading} block disabled={isLocked}>
-              {isLocked ? `Locked - Wait ${formatCountdown(lockCountdown)}` : 'Log in'}
+              {isLocked ? `Locked ${currentUsername} - Wait ${formatCountdown(lockCountdown)}` : 'Log in'}
             </Button>
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 0 }}>
             <Button type="link" size="small" onClick={clearAndResetDefault} style={{ fontSize: 10, padding: 0 }}>
-              Reset to default
+              Reset all (clear counters)
             </Button>
             <Text type="secondary" style={{ fontSize: 10 }}>
-              {attemptInfo ? `Attempts: ${attemptInfo.failedAttempts}/${MAX_ATTEMPTS}` : `Max ${MAX_ATTEMPTS} attempts → ${LOCK_DURATION_MIN} min lock`}
+              {attemptInfo ? `${currentUsername}: ${attemptInfo.failedAttempts}/${MAX_ATTEMPTS}` : `Max ${MAX_ATTEMPTS} → ${LOCK_DURATION_MIN} min lock`}
             </Text>
           </div>
         </Form>
 
-        <Divider style={{ margin: '10px 0' }}>Demo Accounts (click to fill)</Divider>
+        <Divider style={{ margin: '10px 0' }}>Demo Accounts</Divider>
 
         <Space direction="vertical" size={2} style={{ width: '100%', fontSize: 11 }}>
           <Text type="secondary" style={{ fontSize: 10 }}>
-            Password: <Text code style={{ fontSize: 10 }}>Password123!</Text> - {MAX_ATTEMPTS} fails → {LOCK_DURATION_MIN} min lock + countdown
+            Password: <Text code style={{ fontSize: 10 }}>Password123!</Text> - Per-user counter, 5 fails → 10 min lock
           </Text>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, fontSize: 10 }}>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('admin.system')} disabled={!!isLocked}>• admin.system (ADMIN)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('susan.lee')} disabled={!!isLocked}>• susan.lee (MGR)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('james.wilson')} disabled={!!isLocked}>• james.wilson (CHARGE)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('maria.garcia')} disabled={!!isLocked}>• maria.garcia (RN)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('rachel.brown')} disabled={!!isLocked}>• rachel.brown (SCHED)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('patricia.johnson')} disabled={!!isLocked}>• patricia.johnson (HR)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('ahmed.hassan')} disabled={!!isLocked}>• ahmed.hassan (RN)</Button>
-            <Button type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10 }} onClick={() => fillDemoAccount('michael.wong')} disabled={!!isLocked}>• michael.wong (COMPL)</Button>
+            {Object.keys({
+              'admin.system': 1,
+              'susan.lee': 1,
+              'james.wilson': 1,
+              'maria.garcia': 1,
+              'rachel.brown': 1,
+              'patricia.johnson': 1,
+              'ahmed.hassan': 1,
+              'michael.wong': 1,
+            }).map(u => {
+              const info = attemptMap[u];
+              const locked = info?.isLocked;
+              return (
+                <Button key={u} type="link" size="small" style={{ textAlign: 'left', padding: '0 4px', height: 18, fontSize: 10, color: locked ? '#ff4d4f' : undefined }} onClick={() => fillDemoAccount(u)} disabled={!!(attemptMap[u]?.isLocked && u === currentUsername && lockCountdown > 0)}>
+                  • {u} {info ? `(${info.failedAttempts}/${MAX_ATTEMPTS}${locked ? ' LOCKED' : ''})` : ''} {u.includes('admin') ? '(ADMIN)' : ''}
+                </Button>
+              );
+            })}
           </div>
           <div style={{ fontSize: 9, color: '#595959', background: '#fafafa', padding: '6px', borderRadius: 4, border: '1px solid #f0f0f0' }}>
-            <strong>Security:</strong> {MAX_ATTEMPTS} wrong attempts → {LOCK_DURATION_MIN} min lock with live countdown. Counter resets on success. 
-            <br/><strong>Better idea:</strong> Progressive delay (2s,5s,10s) + CAPTCHA after 3 fails + admin alert + IP rate limit. Current is fixed {LOCK_DURATION_MIN} min as you requested - simple and effective for hospital.
+            <strong>Fixed:</strong> Counter is per-username now, not global. 1st fail = 1/5, 2nd = 2/5 (not 5/5). Reset button clears backend + frontend counters. If locked, shows live countdown MM:SS and auto-unlocks.
           </div>
         </Space>
 
         <div style={{ marginTop: 8, textAlign: 'center' }}>
           <Text type="secondary" style={{ fontSize: 9 }}>
-            Secured by rbac.evaluate_access() - {MAX_ATTEMPTS} attempts / {LOCK_DURATION_MIN} min lock
+            Secured - Per-user {MAX_ATTEMPTS} attempts / {LOCK_DURATION_MIN} min lock with countdown
           </Text>
         </div>
       </Card>
