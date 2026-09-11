@@ -55,6 +55,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: development
     container_name: nurse-app-backend
     restart: unless-stopped
     environment:
@@ -66,7 +67,7 @@ services:
       API_HOST: 0.0.0.0
       JWT_SECRET: dev-secret-key-change-in-production-please-use-64-chars-min
       JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production-please-use-64-chars
-      CORS_ORIGIN: http://localhost:3000
+      CORS_ORIGIN: http://localhost:3000,http://localhost:80
     ports:
       - "4000:4000"
     depends_on:
@@ -78,6 +79,24 @@ services:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
     command: npm run start:dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: nurse-app-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:4000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    command: npm run dev
 
 volumes:
   postgres_data:
