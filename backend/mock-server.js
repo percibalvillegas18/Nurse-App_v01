@@ -8,7 +8,18 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
-app.use(cors({ origin: ['http://localhost:3000', 'http://localhost:80'], credentials: true }));
+// Fix for Arena preview: allow all origins, allow iframe embedding, allow preview host
+app.use(cors({ origin: true, credentials: true }));
+app.use((req, res, next) => {
+  // Allow iframe embedding for preview
+  res.removeHeader('X-Frame-Options');
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  // Allow preview host
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Request-Id,X-Session-Id');
+  next();
+});
 app.use(express.json());
 
 // Mock data
@@ -93,6 +104,26 @@ const mockTokens = {
 };
 
 // Routes
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>Nurse-App Mock Backend</title></head>
+      <body style="font-family: sans-serif; padding: 20px;">
+        <h1>🚀 Nurse-App Mock Backend Running</h1>
+        <p>Mode: MOCK - No DB/Redis required, for frontend preview</p>
+        <ul>
+          <li><a href="/api/v1/health">Health Check</a></li>
+          <li><a href="/api/v1/cache/stats">Cache Stats</a></li>
+          <li><a href="/api/v1/rbac/menus/hierarchy?accessibleOnly=true">Menus Hierarchy</a></li>
+          <li><a href="/api/v1/audit/logs">Audit Logs</a></li>
+        </ul>
+        <p>Frontend should be on port 3000, proxying /api to this backend.</p>
+        <p>Try login: admin.system / Password123! (any password works in mock)</p>
+      </body>
+    </html>
+  `);
+});
+
 app.get('/api/v1/health', (req, res) => {
   res.json({
     success: true,
