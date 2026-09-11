@@ -33,11 +33,15 @@ export const ROSTER_STATUSES = [
   'NoShow',
 ] as const;
 
+export const GENDERS = ['Male', 'Female'] as const;
+
 export class CreateNurseDto {
+  /** Optional - auto-generated (EMP-YYYY-NNNNN) when omitted */
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(50)
-  employee_number: string;
+  employee_number?: string;
 
   @IsOptional()
   @IsInt()
@@ -48,10 +52,28 @@ export class CreateNurseDto {
   @MaxLength(100)
   first_name: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  middle_name?: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
   last_name: string;
+
+  @IsOptional()
+  @IsIn(GENDERS as unknown as string[])
+  gender?: string;
+
+  @IsOptional()
+  @IsDateString()
+  date_of_birth?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  nationality?: string;
 
   @IsOptional()
   @IsEmail()
@@ -62,8 +84,10 @@ export class CreateNurseDto {
   @MaxLength(50)
   phone?: string;
 
+  /** Optional - belongs to the (later) employment group */
+  @IsOptional()
   @IsDateString()
-  hire_date: string;
+  hire_date?: string;
 
   @IsOptional()
   @IsIn(EMPLOYMENT_TYPES as unknown as string[])
@@ -97,9 +121,27 @@ export class UpdateNurseDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  middle_name?: string;
+
+  @IsOptional()
+  @IsString()
   @IsNotEmpty()
   @MaxLength(100)
   last_name?: string;
+
+  @IsOptional()
+  @IsIn(GENDERS as unknown as string[])
+  gender?: string;
+
+  @IsOptional()
+  @IsDateString()
+  date_of_birth?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  nationality?: string;
 
   @IsOptional()
   @IsEmail()

@@ -19,6 +19,7 @@ const order = [
   'V2_5__fix_evaluate_access_multirole.sql',
   'V3_0__nursing_domain.sql',
   'V3_1__seed_nursing_demo.sql',
+  'V3_2__nurse_personal_fields.sql',
 ];
 
 async function run() {

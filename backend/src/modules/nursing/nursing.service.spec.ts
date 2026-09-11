@@ -28,13 +28,12 @@ class FakePrisma {
       if (where?.status) rows = rows.filter((n) => n.status === where.status);
       if (where?.home_unit_id) rows = rows.filter((n) => n.home_unit_id === where.home_unit_id);
       if (where?.OR) {
-        const [f, l, e] = where.OR;
-        const q = f.first_name.contains.toLowerCase();
+        const q = where.OR[0].first_name.contains.toLowerCase();
         rows = rows.filter(
           (n) =>
-            n.first_name.toLowerCase().includes(q) ||
-            n.last_name.toLowerCase().includes(q) ||
-            n.employee_number.toLowerCase().includes(q),
+            [n.first_name, n.middle_name, n.last_name, n.employee_number]
+              .filter(Boolean)
+              .some((v: string) => v.toLowerCase().includes(q)),
         );
       }
       return rows
@@ -47,6 +46,8 @@ class FakePrisma {
           credentials: this.credentials.filter((c) => c.nurse_id === n.id && !c.deleted_at),
         }));
     },
+    findFirst: async ({ where }: any) =>
+      this.nurses.find((n) => n.employee_number === where.employee_number) || null,
     findUnique: async ({ where }: any) => {
       const n = this.nurses.find((x) => x.id === where.id);
       if (!n) return null;
@@ -252,6 +253,36 @@ describe('NURSING SERVICE', () => {
       expect(nurse.homeUnit?.code).toBe('ICU_A');
       expect(nurse.credentialSummary).toBe('None');
       expect(audits[audits.length - 1].action).toBe('NURSE_CREATED');
+    });
+
+    it('auto-generates employee_number when omitted (personal-info form)', async () => {
+      const { nurse } = await service.createNurse(
+        { first_name: 'Sara', last_name: 'Ali', gender: 'Female', date_of_birth: '1995-01-01', nationality: 'Saudi' } as any,
+        1,
+      );
+      expect(nurse.employeeNumber).toMatch(/^EMP-\d{4}-(\d{5}|\d+)$/);
+      expect(nurse.gender).toBe('Female');
+      expect(nurse.dateOfBirth).toBe('1995-01-01');
+      expect(nurse.nationality).toBe('Saudi');
+      // cleanup so later tests stay deterministic
+      fake.nurses = fake.nurses.filter((n) => n.id !== nurse.id);
+    });
+
+    it('computes fullName from first + middle + last', async () => {
+      const { nurse } = await service.createNurse(
+        { ...baseNurse, employee_number: 'EMP-3001', user_id: undefined, middle_name: 'Josefa', hire_date: undefined } as any,
+        1,
+      );
+      expect(nurse.fullName).toBe('Maria Josefa Garcia');
+      expect(nurse.middleName).toBe('Josefa');
+      fake.nurses = fake.nurses.filter((n) => n.id !== nurse.id);
+    });
+
+    it('lookups include the country list for nationality selection', async () => {
+      const lookups = await service.getLookups();
+      expect(lookups.countries.length).toBeGreaterThan(150);
+      expect(lookups.countries).toContain('Saudi');
+      expect(lookups.countries).toContain('Philippines');
     });
 
     it('rejects duplicate employee_number with 409 ConflictException', async () => {

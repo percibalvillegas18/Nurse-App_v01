@@ -200,9 +200,15 @@ export interface Nurse {
   id: number;
   employeeNumber: string;
   firstName: string;
+  middleName: string | null;
   lastName: string;
+  /** Computed: First + Middle + Last */
   fullName: string;
+  gender: 'Male' | 'Female' | null;
+  dateOfBirth: string | null;
+  nationality: string | null;
   email: string | null;
+  /** Contact No. (mobile) */
   phone: string | null;
   hireDate: string | null;
   employmentType: EmploymentType;
@@ -266,6 +272,8 @@ export interface NursingLookups {
   units: Array<{ id: number; code: string; name: string }>;
   shifts: Array<{ id: number; code: string; name: string; start_time: string; end_time: string }>;
   posts: Array<{ id: number; code: string; name: string; nursing_unit_id: number }>;
+  /** Country display names for the Nationality selector */
+  countries: string[];
 }
 
 export interface NurseListParams {

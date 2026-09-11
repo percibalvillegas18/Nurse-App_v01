@@ -19,6 +19,38 @@ import {
 /** Days before expiry at which a credential counts as "expiring soon". */
 const EXPIRING_SOON_DAYS = 30;
 
+/** ISO countries for the Nationality selector (display names). */
+export const COUNTRIES: string[] = [
+  'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda', 'Argentina',
+  'Armenia', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain', 'Bangladesh', 'Barbados',
+  'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina',
+  'Botswana', 'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia',
+  'Cameroon', 'Canada', 'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia',
+  'Comoros', 'Congo (Brazzaville)', 'Congo (Kinshasa)', 'Costa Rica', 'Croatia', 'Cuba', 'Cyprus',
+  'Czechia', 'Denmark', 'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador', 'Egypt',
+  'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia', 'Eswatini', 'Ethiopia', 'Fiji',
+  'Finland', 'France', 'Gabon', 'Gambia', 'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada',
+  'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Honduras', 'Hungary', 'Iceland',
+  'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy', 'Ivory Coast', 'Jamaica',
+  'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia',
+  'Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg',
+  'Madagascar', 'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands',
+  'Mauritania', 'Mauritius', 'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia',
+  'Montenegro', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands',
+  'New Zealand', 'Nicaragua', 'Niger', 'Nigeria', 'North Korea', 'North Macedonia', 'Norway',
+  'Oman', 'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru',
+  'Philippines', 'Poland', 'Portugal', 'Qatar', 'Romania', 'Russia', 'Rwanda',
+  'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa',
+  'San Marino', 'Sao Tome and Principe', 'Saudi', 'Senegal', 'Serbia', 'Seychelles',
+  'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia',
+  'South Africa', 'South Korea', 'South Sudan', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname',
+  'Sweden', 'Switzerland', 'Syria', 'Taiwan', 'Tajikistan', 'Tanzania', 'Thailand',
+  'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey', 'Turkmenistan',
+  'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom', 'United States',
+  'Uruguay', 'Uzbekistan', 'Vanuatu', 'Vatican City', 'Venezuela', 'Vietnam', 'Yemen',
+  'Zambia', 'Zimbabwe',
+];
+
 @Injectable()
 export class NursingService {
   private readonly logger = new Logger(NursingService.name);
@@ -49,6 +81,7 @@ export class NursingService {
       const q = params.search.trim();
       where.OR = [
         { first_name: { contains: q, mode: 'insensitive' } },
+        { middle_name: { contains: q, mode: 'insensitive' } },
         { last_name: { contains: q, mode: 'insensitive' } },
         { employee_number: { contains: q, mode: 'insensitive' } },
       ];
@@ -129,16 +162,25 @@ export class NursingService {
   }
 
   async createNurse(dto: CreateNurseDto, actorId: number) {
+    // Employee number is not entered by the user in the personal-info form -
+    // auto-generate a unique one (can be edited later in the employment group).
+    if (!dto.employee_number) {
+      dto.employee_number = await this.generateEmployeeNumber();
+    }
     try {
       const created = await this.prisma.nursing_nurses.create({
         data: {
           employee_number: dto.employee_number,
           user_id: dto.user_id ?? null,
           first_name: dto.first_name,
+          middle_name: dto.middle_name ?? null,
           last_name: dto.last_name,
+          gender: dto.gender ?? null,
+          date_of_birth: dto.date_of_birth ? new Date(dto.date_of_birth) : null,
+          nationality: dto.nationality ?? null,
           email: dto.email ?? null,
           phone: dto.phone ?? null,
-          hire_date: new Date(dto.hire_date),
+          hire_date: dto.hire_date ? new Date(dto.hire_date) : null,
           employment_type: dto.employment_type || 'FullTime',
           primary_role_id: dto.primary_role_id ?? null,
           home_unit_id: dto.home_unit_id ?? null,
@@ -182,10 +224,18 @@ export class NursingService {
           ...(dto.employee_number !== undefined && { employee_number: dto.employee_number }),
           ...(dto.user_id !== undefined && { user_id: dto.user_id }),
           ...(dto.first_name !== undefined && { first_name: dto.first_name }),
+          ...(dto.middle_name !== undefined && { middle_name: dto.middle_name }),
           ...(dto.last_name !== undefined && { last_name: dto.last_name }),
+          ...(dto.gender !== undefined && { gender: dto.gender }),
+          ...(dto.date_of_birth !== undefined && {
+            date_of_birth: dto.date_of_birth ? new Date(dto.date_of_birth) : null,
+          }),
+          ...(dto.nationality !== undefined && { nationality: dto.nationality }),
           ...(dto.email !== undefined && { email: dto.email }),
           ...(dto.phone !== undefined && { phone: dto.phone }),
-          ...(dto.hire_date !== undefined && { hire_date: new Date(dto.hire_date) }),
+          ...(dto.hire_date !== undefined && {
+            hire_date: dto.hire_date ? new Date(dto.hire_date) : null,
+          }),
           ...(dto.employment_type !== undefined && { employment_type: dto.employment_type }),
           ...(dto.primary_role_id !== undefined && { primary_role_id: dto.primary_role_id }),
           ...(dto.home_unit_id !== undefined && { home_unit_id: dto.home_unit_id }),
@@ -550,7 +600,26 @@ export class NursingService {
       units: units || [],
       shifts: shifts || [],
       posts: posts || [],
+      countries: COUNTRIES,
     };
+  }
+
+  /**
+   * Generate a unique employee number (EMP-YYYY-NNNNN) for the personal-info
+   * form, where employee numbers are not entered manually.
+   */
+  private async generateEmployeeNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = `EMP-${year}-${String(10000 + Math.floor(Math.random() * 90000))}`;
+      const existing = await this.prisma.nursing_nurses.findFirst({
+        where: { employee_number: candidate },
+        select: { id: true },
+      });
+      if (!existing) return candidate;
+    }
+    // Extremely unlikely fallback
+    return `EMP-${year}-${Date.now()}`;
   }
 
   // ==========================================================================
@@ -637,8 +706,13 @@ export class NursingService {
       id: Number(r.id),
       employeeNumber: r.employee_number,
       firstName: r.first_name,
+      middleName: r.middle_name ?? null,
       lastName: r.last_name,
-      fullName: `${r.first_name} ${r.last_name}`,
+      // Full Name = First + Middle + Last (middle omitted when not set)
+      fullName: [r.first_name, r.middle_name, r.last_name].filter(Boolean).join(' '),
+      gender: r.gender ?? null,
+      dateOfBirth: r.date_of_birth ? this.toDateOnly(r.date_of_birth) : null,
+      nationality: r.nationality ?? null,
       email: r.email,
       phone: r.phone,
       hireDate: r.hire_date ? this.toDateOnly(r.hire_date) : null,

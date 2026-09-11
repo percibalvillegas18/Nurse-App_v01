@@ -15,6 +15,8 @@ import {
   Popconfirm,
   Drawer,
   Descriptions,
+  Row,
+  Col,
   message,
   Tooltip,
   Empty,
@@ -72,25 +74,30 @@ export const NurseMaster: React.FC = () => {
   const deleteNurse = useDeleteNurse();
   const [form] = Form.useForm();
 
+  // Live full-name preview: First + Middle + Last (matches backend composition)
+  const wFirst = Form.useWatch('firstName', form);
+  const wMiddle = Form.useWatch('middleName', form);
+  const wLast = Form.useWatch('lastName', form);
+  const computedFullName = [wFirst, wMiddle, wLast].filter((s) => s && String(s).trim()).join(' ');
+
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ employmentType: 'FullTime' });
     setModalOpen(true);
   };
 
   const openEdit = (nurse: Nurse) => {
     setEditing(nurse);
     form.setFieldsValue({
-      employeeNumber: nurse.employeeNumber,
       firstName: nurse.firstName,
+      middleName: nurse.middleName,
       lastName: nurse.lastName,
+      gender: nurse.gender,
+      dateOfBirth: nurse.dateOfBirth ? dayjs(nurse.dateOfBirth) : null,
+      nationality: nurse.nationality,
       email: nurse.email,
-      phone: nurse.phone,
-      hireDate: nurse.hireDate ? dayjs(nurse.hireDate) : null,
-      employmentType: nurse.employmentType,
+      contactNo: nurse.phone,
       primaryRoleId: nurse.primaryRole?.id,
-      homeUnitId: nurse.homeUnit?.id,
       status: nurse.status,
     });
     setModalOpen(true);
@@ -100,26 +107,24 @@ export const NurseMaster: React.FC = () => {
     const values = await form.validateFields();
     const payload: any = {
       first_name: values.firstName,
+      middle_name: values.middleName || undefined,
       last_name: values.lastName,
+      gender: values.gender,
+      date_of_birth: values.dateOfBirth ? values.dateOfBirth.format('YYYY-MM-DD') : undefined,
+      nationality: values.nationality,
       email: values.email || undefined,
-      phone: values.phone || undefined,
-      employment_type: values.employmentType,
+      phone: values.contactNo || undefined,
       primary_role_id: values.primaryRoleId,
-      home_unit_id: values.homeUnitId,
     };
-    if (values.hireDate) payload.hire_date = values.hireDate.format('YYYY-MM-DD');
 
     try {
       if (editing) {
-        if (values.employeeNumber !== editing.employeeNumber)
-          payload.employee_number = values.employeeNumber;
         if (values.status !== editing.status) payload.status = values.status;
         await updateNurse.mutateAsync({ id: editing.id, data: payload });
-        message.success(`Nurse ${payload.first_name} ${payload.last_name} updated`);
+        message.success(`${computedFullName || 'Nurse'} updated`);
       } else {
-        payload.employee_number = values.employeeNumber;
-        await createNurse.mutateAsync(payload);
-        message.success(`Nurse ${payload.first_name} ${payload.last_name} created`);
+        const created = await createNurse.mutateAsync(payload);
+        message.success(`${computedFullName || 'Nurse'} registered as ${created.employeeNumber}`);
       }
       setModalOpen(false);
     } catch (e: any) {
@@ -330,7 +335,7 @@ export const NurseMaster: React.FC = () => {
         />
       </Card>
 
-      {/* Create / Edit modal */}
+      {/* Create / Edit modal - personal info entry */}
       <Modal
         title={editing ? `Edit ${editing.fullName}` : 'Add Nurse'}
         open={modalOpen}
@@ -338,65 +343,105 @@ export const NurseMaster: React.FC = () => {
         onCancel={() => setModalOpen(false)}
         confirmLoading={createNurse.isPending || updateNurse.isPending}
         destroyOnHidden
-        width={560}
+        width={640}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            name="employeeNumber"
-            label="Employee Number"
-            rules={[{ required: true, message: 'Required' }]}
-          >
-            <Input placeholder="EMP-XXXX" />
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="firstName" label="First Name" rules={[{ required: true, message: 'Required' }]}>
+                <Input placeholder="e.g. Maria" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="middleName" label="Middle Name">
+                <Input placeholder="Optional" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="lastName" label="Last Name" rules={[{ required: true, message: 'Required' }]}>
+                <Input placeholder="e.g. Garcia" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item label="Full Name (auto: First + Middle + Last)">
+            <Input
+              value={computedFullName}
+              readOnly
+              placeholder="Fills automatically as you type the names above"
+              style={{ background: '#f5f5f5', color: computedFullName ? '#1677ff' : undefined, fontWeight: 600 }}
+            />
           </Form.Item>
-          <Space.Compact block>
-            <Form.Item name="firstName" label="First Name" rules={[{ required: true }]} style={{ width: '50%', marginRight: 8 }}>
-              <Input />
-            </Form.Item>
-            <Form.Item name="lastName" label="Last Name" rules={[{ required: true }]} style={{ width: '50%' }}>
-              <Input />
-            </Form.Item>
-          </Space.Compact>
-          <Space.Compact block>
-            <Form.Item name="email" label="Email" style={{ width: '50%', marginRight: 8 }}>
-              <Input type="email" />
-            </Form.Item>
-            <Form.Item name="phone" label="Phone" style={{ width: '50%' }}>
-              <Input />
-            </Form.Item>
-          </Space.Compact>
-          <Space.Compact block>
-            <Form.Item name="hireDate" label="Hire Date" rules={[{ required: true }]} style={{ width: '50%', marginRight: 8 }}>
-              <DatePicker style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="employmentType" label="Employment Type" rules={[{ required: true }]} style={{ width: '50%' }}>
-              <Select
-                options={['FullTime', 'PartTime', 'PRN', 'Contract'].map((t) => ({ value: t, label: t }))}
-              />
-            </Form.Item>
-          </Space.Compact>
-          <Space.Compact block>
-            <Form.Item name="primaryRoleId" label="Primary Role" style={{ width: '50%', marginRight: 8 }}>
-              <Select
-                allowClear
-                placeholder="Select role"
-                options={(lookups?.roles ?? []).map((r) => ({ value: r.id, label: `${r.name} (${r.code})` }))}
-              />
-            </Form.Item>
-            <Form.Item name="homeUnitId" label="Home Unit" style={{ width: '50%' }}>
-              <Select
-                allowClear
-                placeholder="Select unit"
-                options={(lookups?.units ?? []).map((u) => ({ value: u.id, label: `${u.name} (${u.code})` }))}
-              />
-            </Form.Item>
-          </Space.Compact>
-          {editing && (
-            <Form.Item name="status" label="Status">
-              <Select
-                options={['Active', 'OnLeave', 'Suspended', 'Terminated'].map((s) => ({ value: s, label: s }))}
-              />
-            </Form.Item>
-          )}
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="gender" label="Gender" rules={[{ required: true, message: 'Required' }]}>
+                <Select
+                  placeholder="Select"
+                  options={['Male', 'Female'].map((g) => ({ value: g, label: g }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="dateOfBirth" label="Date of Birth" rules={[{ required: true, message: 'Required' }]}>
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="nationality" label="Nationality" rules={[{ required: true, message: 'Required' }]}>
+                <Select
+                  showSearch
+                  placeholder="Select country"
+                  optionFilterProp="label"
+                  options={(lookups?.countries ?? []).map((c) => ({ value: c, label: c }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="contactNo" label="Contact No. (Mobile)" rules={[{ required: true, message: 'Required' }]}>
+                <Input placeholder="+966-5X-XXX-XXXX" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="email" label="Email Address">
+                <Input type="email" placeholder="name@hospital.local" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={editing ? 12 : 24}>
+              <Form.Item name="primaryRoleId" label="Primary Role" rules={[{ required: true, message: 'Required' }]}>
+                <Select
+                  placeholder="Select role"
+                  options={(lookups?.roles ?? []).map((r) => ({ value: r.id, label: `${r.name} (${r.code})` }))}
+                />
+              </Form.Item>
+            </Col>
+            {editing && (
+              <Col span={12}>
+                <Form.Item name="status" label="Status">
+                  <Select
+                    options={['Active', 'OnLeave', 'Suspended', 'Terminated'].map((s) => ({ value: s, label: s }))}
+                  />
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 0 }}
+            message={
+              editing
+                ? `Employee #: ${editing.employeeNumber}`
+                : 'Employee # is auto-generated on save. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
+            }
+          />
         </Form>
       </Modal>
 
@@ -415,12 +460,18 @@ export const NurseMaster: React.FC = () => {
               <Descriptions.Item label="Status">
                 <Tag color={viewedNurse.status === 'Active' ? 'green' : 'orange'}>{viewedNurse.status}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="Role">{viewedNurse.primaryRole?.name ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="Home Unit">{viewedNurse.homeUnit?.name ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="Hire Date">{viewedNurse.hireDate}</Descriptions.Item>
-              <Descriptions.Item label="Employment">{viewedNurse.employmentType}</Descriptions.Item>
+              <Descriptions.Item label="Full Name">{viewedNurse.fullName}</Descriptions.Item>
+              <Descriptions.Item label="Gender">{viewedNurse.gender ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Date of Birth">
+                {viewedNurse.dateOfBirth
+                  ? `${viewedNurse.dateOfBirth} (${dayjs().diff(dayjs(viewedNurse.dateOfBirth), 'year')} yrs)`
+                  : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Nationality">{viewedNurse.nationality ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Contact No.">{viewedNurse.phone ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Email">{viewedNurse.email ?? '—'}</Descriptions.Item>
-              <Descriptions.Item label="Phone">{viewedNurse.phone ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Primary Role">{viewedNurse.primaryRole?.name ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Home Unit">{viewedNurse.homeUnit?.name ?? '—'}</Descriptions.Item>
             </Descriptions>
 
             <Title level={5}>Credentials ({viewedNurse.credentials.length})</Title>

@@ -38,7 +38,8 @@ Nurse-App_v01/
 │   │   ├── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
 │   │   ├── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
 │   │   ├── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
-│   │   └── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
+│   │   ├── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
+│   │   └── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
 │   ├── scripts/run-migrations.ts
 │   ├── Dockerfile
 │   ├── package.json
@@ -88,6 +89,7 @@ psql $DATABASE_URL -f database/migrations/V2_4__seed_rbac_configuration.sql
 psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sql
 psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
 psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
+psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
 
 # Or use script
 npx ts-node scripts/run-migrations.ts
@@ -142,9 +144,14 @@ WHERE role_code = ANY(v_all_role_codes)
 - Load testing
 
 ## Done Recently
+- ✅ NurseMaster personal-info entry (V3_2): First/Middle/Last Name with auto
+  Full Name (First+Middle+Last), Gender (Male/Female), Date of Birth,
+  Nationality (196-country dropdown), Contact No., Email, Primary Role;
+  employee # auto-generated; Employment Type/Hire Date/Home Unit moved out
+  for a future employment group
 - ✅ Nursing domain Phase 1: V3_0 schema (nurses/credentials/roster), V3_1 demo seed,
   Nest `NursingModule` with RBAC-guarded CRUD (`/api/v1/nursing/*`), double-booking
-  prevention (409), audit logging, 13 unit tests
+  prevention (409), audit logging, unit tests
 - ✅ Frontend wired to live data: NurseMaster (search/pagination/CRUD/drawer),
   Credentials compliance radar, Roster calendar with day details
 - ✅ Frontend React app (React 18 + Vite + Ant Design)

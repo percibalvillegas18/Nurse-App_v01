@@ -480,10 +480,14 @@ model nursing_nurses {
   employee_number String    @unique @db.VarChar(50)
   user_id         BigInt?   @unique
   first_name      String    @db.VarChar(100)
+  middle_name     String?   @db.VarChar(100)
   last_name       String    @db.VarChar(100)
+  gender          String?   @db.VarChar(50) // nursing.gender enum (Male | Female)
+  date_of_birth   DateTime? @db.Date
+  nationality     String?   @db.VarChar(100)
   email           String?   @db.VarChar(255)
   phone           String?   @db.VarChar(50)
-  hire_date       DateTime  @db.Date
+  hire_date       DateTime? @db.Date
   employment_type String    @default("FullTime") @db.VarChar(50) // nursing.employment_type enum
   primary_role_id BigInt?
   home_unit_id    BigInt?
