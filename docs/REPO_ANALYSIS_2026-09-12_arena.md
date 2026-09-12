@@ -5,10 +5,22 @@
 **Method:** Static read of all source + config + migrations, plus live verification
 (`npm ci`, `npx tsc --noEmit`, `jest`, `vite build`) in a clean checkout.
 
-> **Status update (same-day follow-up pass):** findings **C-1** (type error),
-> **H-1** (audit-export permission gap) and **M-1** (menu-cache key collision)
-> have been fixed and verified — `tsc --noEmit` passes, `jest` is 3/3 suites
-> green (35 passed / 5 skipped), `nest build` succeeds.
+> **Status update (same-day follow-up passes):**
+>
+> - **C-1** (type error), **H-1** (audit-export permission gap) and **M-1**
+>   (menu-cache key collision) — fixed and committed (`9da0f44`).
+> - **H-2** (data-scope enforcement) — service-layer org/dept/unit filtering +
+>   7 new tests, plus `V3_7` SQL defence-in-depth (`1a7ab62`).
+> - **M-2** (migration-path consolidation) — single checksummed runner path,
+>   README fixed (`e1d14fb`).
+> - **M-3** (Prisma/PG drift) — `audit.audit_logs` modelled with composite PK
+>   `(id, created_at)` to match V3_6 partitioning (`8686c79`).
+> - **M-4** (bundle size) — route-level lazy loading + vendor chunks; entry
+>   bundle ~1.5 MB → ~17 KB (`008ded5`).
+>
+> Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (42 passed / 5 skipped)
+> ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
+> `eslint` 0 errors ✅.
 
 > Supersedes `docs/REPO_ANALYSIS_2026-09-12.md` (which analyzed an earlier,
 > documentation-only state). Nearly every critical finding from that report has
