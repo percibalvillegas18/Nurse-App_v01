@@ -78,7 +78,7 @@ export class NursingController {
   @Post('nurses')
   @CanCreate('NURSE_MASTER')
   async createNurse(@Body() dto: CreateNurseDto, @Req() req: any) {
-    const data = await this.nursingService.createNurse(dto, req.user.id);
+    const data = await this.nursingService.createNurse(dto, req.user.id, req.user.id);
     return { success: true, statusCode: 201, data, timestamp: new Date().toISOString() };
   }
 
@@ -89,14 +89,14 @@ export class NursingController {
     @Body() dto: UpdateNurseDto,
     @Req() req: any,
   ) {
-    const data = await this.nursingService.updateNurse(id, dto, req.user.id);
+    const data = await this.nursingService.updateNurse(id, dto, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Delete('nurses/:id')
   @RequirePermission({ menuCode: 'NURSE_MASTER', permissionCode: 'DELETE', resourceIdParam: 'id' })
   async deleteNurse(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    const data = await this.nursingService.softDeleteNurse(id, req.user.id);
+    const data = await this.nursingService.softDeleteNurse(id, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
@@ -124,7 +124,7 @@ export class NursingController {
   @Post('credentials')
   @CanCreate('CREDENTIALS')
   async createCredential(@Body() dto: CreateCredentialDto, @Req() req: any) {
-    const data = await this.nursingService.createCredential(dto, req.user.id);
+    const data = await this.nursingService.createCredential(dto, req.user.id, req.user.id);
     return { success: true, statusCode: 201, data, timestamp: new Date().toISOString() };
   }
 
@@ -135,7 +135,7 @@ export class NursingController {
     @Body() dto: UpdateCredentialDto,
     @Req() req: any,
   ) {
-    const data = await this.nursingService.updateCredential(id, dto, req.user.id);
+    const data = await this.nursingService.updateCredential(id, dto, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
@@ -146,7 +146,7 @@ export class NursingController {
     @Body() dto: VerifyCredentialDto,
     @Req() req: any,
   ) {
-    const data = await this.nursingService.verifyCredential(id, dto, req.user.id);
+    const data = await this.nursingService.verifyCredential(id, dto, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
@@ -191,14 +191,14 @@ export class NursingController {
     @Body() dto: UpdateRosterAssignmentDto,
     @Req() req: any,
   ) {
-    const data = await this.nursingService.updateRosterAssignment(id, dto, req.user.id);
+    const data = await this.nursingService.updateRosterAssignment(id, dto, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Delete('roster/:id')
   @CanDelete('NURSE_ROSTER')
   async deleteRosterAssignment(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    const data = await this.nursingService.softDeleteRosterAssignment(id, req.user.id);
+    const data = await this.nursingService.softDeleteRosterAssignment(id, req.user.id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 

@@ -14,7 +14,11 @@
 --   'Hospital'      -> organization_id and everything below it
 --   'Department'    -> department_id and its nursing units
 --   'NursingUnit'   -> a single unit
---   'Post'/'Shift'/'Assigned' -> not yet enforced (documented TODO)
+--   'Post'/'Shift'  -> enforced at the service layer (roster rows); this SQL
+--                     function only receives org/dept/unit ids, so they are
+--                     not evaluated here.
+--   'Assigned'      -> rule-based (assignment_rule / assignment_rule_config);
+--                     no rule engine exists yet, so it fails closed (TODO).
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------

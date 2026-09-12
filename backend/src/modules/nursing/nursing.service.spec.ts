@@ -13,10 +13,12 @@ class FakePrisma {
   nurses: any[] = [];
   credentials: any[] = [];
   roster: any[] = [];
-  // Data-scope fixtures: default grants user 1 'All' so the pre-existing
-  // CRUD tests behave exactly as before; scope tests override this per-case.
+  // Data-scope fixtures: default grants users 1 and 9 'All' so the
+  // pre-existing CRUD tests behave exactly as before; scope tests override
+  // this per-case.
   dataScopes: any[] = [
     { user_id: 1, scope_type: 'All', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, effective_from: null, effective_to: null },
+    { user_id: 9, scope_type: 'All', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, effective_from: null, effective_to: null },
   ];
   organizations = [{ id: 1, code: 'CENTRAL_HOSP', name: 'Central Hospital' }];
   departments = [{ id: 10, code: 'ICU', name: 'ICU', organization_id: 1 }];
@@ -188,6 +190,18 @@ class FakePrisma {
       } else if (where?.nursing_unit_id) {
         rows = rows.filter((a) => a.nursing_unit_id === where.nursing_unit_id);
       }
+      if (where?.shift_id?.in) rows = rows.filter((a) => where.shift_id.in.includes(a.shift_id));
+      if (where?.post_id?.in) rows = rows.filter((a) => where.post_id.in.includes(a.post_id));
+      if (where?.OR) {
+        rows = rows.filter((a) =>
+          where.OR.some((clause: any) => {
+            if (clause.nursing_unit_id?.in) return clause.nursing_unit_id.in.includes(a.nursing_unit_id);
+            if (clause.shift_id?.in) return clause.shift_id.in.includes(a.shift_id);
+            if (clause.post_id?.in) return clause.post_id.in.includes(a.post_id);
+            return false;
+          }),
+        );
+      }
       if (where?.nurse_id) rows = rows.filter((a) => a.nurse_id === where.nurse_id);
       if (where?.status) rows = rows.filter((a) => a.status === where.status);
       return rows.map((a) => ({
@@ -250,6 +264,7 @@ class FakePrisma {
       if (where?.status) rows = rows.filter((u) => ((u as any).status ?? 'Active') === where.status);
       return rows;
     },
+    findUnique: async ({ where }: any) => this.units.find((u) => u.id === where.id) || null,
   };
   rbac_user_data_scopes = {
     findMany: async ({ where }: any) => {
@@ -292,6 +307,7 @@ describe('NURSING SERVICE', () => {
       const { nurse } = await service.createNurse(
         { ...baseNurse, hire_date: '2019-03-01' } as any,
         1,
+        1,
       );
       expect(nurse.employeeNumber).toBe('EMP-1001');
       expect(nurse.fullName).toBe('Maria Garcia');
@@ -306,6 +322,7 @@ describe('NURSING SERVICE', () => {
       const { nurse } = await service.createNurse(
         { job_no: 'JOB-2002', first_name: 'Sara', last_name: 'Ali', gender: 'Female', date_of_birth: '1995-01-01', nationality: 'Saudi' } as any,
         1,
+        1,
       );
       expect(nurse.employeeNumber).toMatch(/^EMP-\d{4}-(\d{5}|\d+)$/);
       expect(nurse.gender).toBe('Female');
@@ -318,6 +335,7 @@ describe('NURSING SERVICE', () => {
     it('computes fullName from first + middle + last', async () => {
       const { nurse } = await service.createNurse(
         { ...baseNurse, employee_number: 'EMP-3001', job_no: 'JOB-3003', user_id: undefined, middle_name: 'Josefa', hire_date: undefined } as any,
+        1,
         1,
       );
       expect(nurse.fullName).toBe('Maria Josefa Garcia');
@@ -334,7 +352,7 @@ describe('NURSING SERVICE', () => {
 
     it('rejects duplicate employee_number with 409 ConflictException', async () => {
       await expect(
-        service.createNurse({ ...baseNurse, job_no: 'JOB-4004', hire_date: '2019-03-01', user_id: 99 } as any, 1),
+        service.createNurse({ ...baseNurse, job_no: 'JOB-4004', hire_date: '2019-03-01', user_id: 99 } as any, 1, 1),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -342,6 +360,7 @@ describe('NURSING SERVICE', () => {
       await expect(
         service.createNurse(
           { ...baseNurse, employee_number: 'EMP-1002', job_no: 'JOB-5005', hire_date: '2019-03-01' } as any,
+          1,
           1,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -351,6 +370,7 @@ describe('NURSING SERVICE', () => {
       await expect(
         service.createNurse(
           { ...baseNurse, employee_number: 'EMP-7007', job_no: 'JOB-1001', user_id: undefined } as any,
+          1,
           1,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -375,7 +395,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('soft delete marks terminated + deleted_at and audit logs', async () => {
-      const res = await service.softDeleteNurse(1, 1);
+      const res = await service.softDeleteNurse(1, 1, 1);
       expect(res.message).toContain('deleted');
       const stored = fake.nurses.find((n) => n.id === 1);
       expect(stored.deleted_at).toBeTruthy();
@@ -399,6 +419,7 @@ describe('NURSING SERVICE', () => {
           hire_date: '2020-01-01',
         } as any,
         1,
+        1,
       );
       expect(nurse.id).toBeGreaterThan(1);
     });
@@ -413,6 +434,7 @@ describe('NURSING SERVICE', () => {
           expiry_date: dateOnly(inDays),
         } as any,
         1,
+        1,
       );
       expect(credential.status).toBe('PendingVerification');
       expect(credential.daysUntilExpiry).toBeGreaterThan(18);
@@ -424,12 +446,13 @@ describe('NURSING SERVICE', () => {
         service.createCredential(
           { nurse_id: 2, credential_type: 'Certification', name: 'BLS' } as any,
           1,
+          1,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('verify sets status, verifier and timestamp', async () => {
-      const { credential } = await service.verifyCredential(1, { status: 'Valid' }, 9);
+      const { credential } = await service.verifyCredential(1, { status: 'Valid' }, 9, 9);
       expect(credential.status).toBe('Valid');
       expect(credential.verifiedBy).toBe(9);
       expect(credential.verifiedAt).toBeTruthy();
@@ -495,7 +518,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('soft delete marks cancelled and removes from window list', async () => {
-      const res = await service.softDeleteRosterAssignment(2, 1);
+      const res = await service.softDeleteRosterAssignment(2, 1, 1);
       expect(res.message).toContain('deleted');
       const list = await service.listRoster(
         {
@@ -626,5 +649,159 @@ describe('DATA SCOPE ENFORCEMENT', () => {
       10,
     );
     expect(res.items.map((a: any) => a.id)).toEqual([1]);
+  });
+
+  // --------------------------------------------------------------------------
+  // Write-path enforcement (least privilege on create/update/delete)
+  // --------------------------------------------------------------------------
+
+  it('blocks nurse creation when the home unit is outside the unit scope', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(
+      service.createNurse(
+        {
+          employee_number: 'EMP-SC-1',
+          job_no: 'JOB-SC-1',
+          first_name: 'Out',
+          last_name: 'OfScope',
+          home_unit_id: 2,
+        } as any,
+        10,
+        10,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows nurse creation when the home unit is inside the unit scope', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    const { nurse } = await service.createNurse(
+      {
+        employee_number: 'EMP-SC-2',
+        job_no: 'JOB-SC-2',
+        first_name: 'In',
+        last_name: 'Scope',
+        home_unit_id: 1,
+      } as any,
+      10,
+      10,
+    );
+    expect(nurse.homeUnit?.code).toBe('ICU_A');
+  });
+
+  it('blocks nurse update that moves the nurse to an out-of-scope unit', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(
+      service.updateNurse(101, { home_unit_id: 2 } as any, 10, 10),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('blocks credential creation for a nurse outside the unit scope', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(
+      service.createCredential(
+        { nurse_id: 102, credential_type: 'Certification', name: 'ACLS' } as any,
+        10,
+        10,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('denies nurse writes for a Shift-only scope (no unit-dimension grant)', async () => {
+    fake.dataScopes = [
+      { user_id: 20, scope_type: 'Shift', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, shift_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(
+      service.createNurse(
+        { employee_number: 'EMP-SC-3', job_no: 'JOB-SC-3', first_name: 'No', last_name: 'Unit', home_unit_id: 1 } as any,
+        20,
+        20,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('Shift scope filters the roster list to that shift across units', async () => {
+    fake.dataScopes = [
+      { user_id: 20, scope_type: 'Shift', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, shift_id: 1, effective_from: null, effective_to: null },
+    ];
+    fake.roster.push(
+      { id: 3, nurse_id: 101, nursing_unit_id: 1, shift_id: 1, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+      { id: 4, nurse_id: 102, nursing_unit_id: 2, shift_id: 1, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+      { id: 5, nurse_id: 101, nursing_unit_id: 1, shift_id: 2, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+    );
+    const res = await service.listRoster(
+      { from: dateOnly(new Date()), to: dateOnly(new Date(Date.now() + 7 * DAY)) },
+      20,
+    );
+    expect(res.items.map((a: any) => a.id).sort()).toEqual([3, 4]);
+  });
+
+  it('Shift scope allows roster writes in-shift and blocks out-of-shift', async () => {
+    fake.dataScopes = [
+      { user_id: 20, scope_type: 'Shift', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, shift_id: 1, effective_from: null, effective_to: null },
+    ];
+    // In-shift across a different unit: allowed.
+    await expect(
+      service.createRosterAssignment(
+        {
+          nurse_id: 102,
+          nursing_unit_id: 2,
+          shift_id: 1,
+          assignment_date: dateOnly(new Date(Date.now() + 2 * DAY)),
+        } as any,
+        20,
+        20,
+      ),
+    ).resolves.toBeDefined();
+    // Out-of-shift: denied.
+    await expect(
+      service.createRosterAssignment(
+        {
+          nurse_id: 101,
+          nursing_unit_id: 1,
+          shift_id: 2,
+          assignment_date: dateOnly(new Date(Date.now() + 3 * DAY)),
+        } as any,
+        20,
+        20,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('Post scope filters the roster list to that post', async () => {
+    fake.dataScopes = [
+      { user_id: 30, scope_type: 'Post', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, post_id: 5, effective_from: null, effective_to: null },
+    ];
+    fake.roster.push(
+      { id: 6, nurse_id: 101, nursing_unit_id: 1, shift_id: 1, post_id: 5, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+      { id: 7, nurse_id: 102, nursing_unit_id: 2, shift_id: 2, post_id: 9, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+    );
+    const res = await service.listRoster(
+      { from: dateOnly(new Date()), to: dateOnly(new Date(Date.now() + 7 * DAY)) },
+      30,
+    );
+    expect(res.items.map((a: any) => a.id)).toEqual([6]);
+  });
+
+  it('roster update and soft-delete are denied outside the scope', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    fake.roster.push(
+      { id: 8, nurse_id: 102, nursing_unit_id: 2, shift_id: 1, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+    );
+    await expect(
+      service.updateRosterAssignment(8, { status: 'Confirmed' } as any, 10, 10),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      service.softDeleteRosterAssignment(8, 10, 10),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
