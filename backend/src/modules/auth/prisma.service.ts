@@ -712,10 +712,19 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (query.includes('audit.audit_logs') && query.includes('GROUP BY action')) {
-      return [
-        { action: 'LOGIN_SUCCESS', count: 45 },
-        { action: 'ACCESS_DENIED', count: 12 },
-      ];
+      // Aggregate the in-memory trail for real, so the numbers on the Audit
+      // Logs page agree with the rows listed below it. These used to be two
+      // hardcoded constants (45 / 12) that never matched anything.
+      const since = params[0] ? new Date(params[0]).getTime() : 0;
+      const counts = new Map<string, number>();
+      for (const row of this.mockAuditLogs) {
+        if (new Date(row.created_at).getTime() < since) continue;
+        counts.set(row.action, (counts.get(row.action) || 0) + 1);
+      }
+      return [...counts.entries()]
+        .map(([action, count]) => ({ action, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
     }
 
     // Default empty
