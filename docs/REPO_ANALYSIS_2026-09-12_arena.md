@@ -37,6 +37,9 @@
 >   enforced by `JwtStrategy` + refresh (previously `SESSION_TIMEOUT`/
 >   `SESSION_ABSOLUTE_TIMEOUT` were dead config and refresh minted tokens
 >   forever), plus a frontend `SessionIdleGuard` auto-logout.
+> - **Audit retention/partition cron** — `AuditMaintenanceService`
+>   (@nestjs/schedule daily cron) runs `ensure_audit_partitions_ahead` +
+>   `drop_audit_partitions_older_than`; the "job to wire in ops" is now wired.
 >
 > Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
@@ -238,8 +241,9 @@ Confirmed resolved in this codebase:
   Redis caching and precise invalidation (per-user / per-role), enforced
   server-side by `RbacGuard` — frontend hiding is explicitly cosmetic.
 - Real HIPAA posture: append-only tamper-proof hash chain (V3_5) + monthly
-  partitioning with 6-year retention (V3_6), PHI-read audit interceptor that
-  stores metadata only, immutable audit triggers + RLS.
+  partitioning with 6-year retention (V3_6, now maintained by a daily
+  scheduled job), PHI-read audit interceptor that stores metadata only,
+  immutable audit triggers + RLS.
 - Fail-closed authN/authZ throughout (DB down → deny; no secret → no start;
   mock → deny-by-default).
 - Good operational hygiene: real `/health/ready` dependency checks, session

@@ -61,7 +61,7 @@
 |---------|-------------|----------------|----------------|----------|
 | Hardware / software / procedural mechanisms that record and examine activity | Comprehensive logging of PHI access | ✅ | `AuditInterceptor` logs all mutations AND metadata-only reads of nurse/credential/roster (`VIEW_*` actions); AuthService logs login success/failure/lockout | High |
 | Tamper-evident / immutable logs | Logs cannot be altered by application users | ✅ | BEFORE UPDATE/DELETE triggers (`fn_audit_immutable`) + RLS forbid changes even for table owners; SHA-256 hash chain (`prev_hash`/`entry_hash`) + `verify_audit_chain()` (V3_5/V3_6) | Medium |
-| Retention | Minimum 6 years | ⚠️ | Monthly RANGE partitioning + `drop_audit_partitions_older_than('6 years')` (V3_6); **a scheduled archival/retention job still needs to be wired in ops** | High |
+| Retention | Minimum 6 years | ✅ | Monthly RANGE partitioning + `drop_audit_partitions_older_than('6 years')` (V3_6); scheduled daily maintenance job (`AuditMaintenanceService`) runs `ensure_audit_partitions_ahead` + retention drop | High |
 | PHI exclusion from application logs | Never log full PHI in application/debug logs | ⚠️ | Interceptor sanitizes passwords/tokens and stores metadata only for PHI reads (no response bodies); mutation bodies may still contain names/DOB | Medium |
 
 **Code references**
@@ -72,7 +72,7 @@
 
 **Recommended next steps**
 1. Add redaction middleware that strips or hashes known PHI fields from mutation bodies before any log write.
-2. Schedule the retention job (`audit.drop_audit_partitions_older_than`) and `ensure_audit_partitions_ahead` in production ops (cron / pg_cron).
+2. ~~Schedule the retention job (`audit.drop_audit_partitions_older_than`) and `ensure_audit_partitions_ahead` in production ops (cron / pg_cron).~~ ✅ — done: `AuditMaintenanceService` daily cron (@nestjs/schedule).
 3. Move `AuditService.log()` failures into an explicit error metric/alert (audit writes currently fail non-blocking by design).
 
 ---
@@ -188,7 +188,7 @@ These are primarily the responsibility of the hosting provider and facility:
 ### High
 6. ~~Idle session timeout (client + server).~~ ✅ — done.
 7. ~~Comprehensive audit of read access~~ ✅ — AuditInterceptor now logs PHI reads (`VIEW_*`, metadata only).
-8. ~~Audit log retention + partitioning + immutability~~ ✅ — V3_5/V3_6 (hash chain, triggers, monthly partitions, 6-year retention helper); wire the scheduled retention job in ops.
+8. ~~Audit log retention + partitioning + immutability~~ ✅ — V3_5/V3_6 + scheduled maintenance job (`AuditMaintenanceService`).
 9. ~~Resource-aware data-scope enforcement~~ ✅ on reads + writes — V3_7 + NursingService; org/dept/unit + `Post`/`Shift` implemented. Only rule-based `Assigned` remains (needs an assignment-rule engine; fails closed today).
 10. Break-glass / emergency access procedure with mandatory audit review.
 
@@ -231,7 +231,7 @@ These are primarily the responsibility of the hosting provider and facility:
 | Access control / RBAC | `rbac.guard.ts`, `evaluate_access` SQL, role matrix seeds |
 | Data scope (least privilege) | `NursingService` scope resolution, `V3_7__enforce_data_scope.sql` |
 | Authentication | `auth.service.ts`, `login-throttle.service.ts`, JWT strategy |
-| Audit | `audit.interceptor.ts`, `audit.service.ts`, RLS + immutability triggers + hash chain (V3_5), partitioning (V3_6) |
+| Audit | `audit.interceptor.ts`, `audit.service.ts`, RLS + immutability triggers + hash chain (V3_5), partitioning + retention cron (V3_6 + `AuditMaintenanceService`) |
 | Password security | bcrypt rounds = 12, lockout counters |
 | Session management | `auth_sessions` table, idle + sliding + absolute time windows, revocation on logout |
 | Data model (PHI candidates) | Nursing domain tables (V3_*), personal fields, job_no |
@@ -243,7 +243,7 @@ These are primarily the responsibility of the hosting provider and facility:
 1. Add MFA module (TOTP) behind feature flag.
 2. ~~Add idle-timeout middleware + frontend idle detector.~~ ✅ — done.
 3. ~~Expand `AuditInterceptor` to sensitive GET endpoints~~ ✅ — done (PHI read logging).
-4. ~~Add migration for audit_log partitioning~~ ✅ — V3_6; **remaining:** schedule the retention/partition-ahead job (cron / pg_cron).
+4. ~~Add migration for audit_log partitioning~~ ✅ — V3_6; ~~schedule the retention/partition-ahead job~~ ✅ — `AuditMaintenanceService` daily cron.
 5. Production Docker / K8s manifests that force TLS and encrypted volumes.
 6. Document BAA checklist for every third-party service used.
 
