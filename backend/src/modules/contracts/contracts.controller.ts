@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ContractsService } from './contracts.service';
+import { ContractAlertsService } from './contract-alerts.service';
 import {
   CreateContractDto,
   UpdateContractDto,
@@ -31,7 +32,10 @@ import { RbacGuard } from '../../common/guards/rbac.guard';
 @Controller('contracts')
 @UseGuards(AuthGuard('jwt'), RbacGuard)
 export class ContractsController {
-  constructor(private contracts: ContractsService) {}
+  constructor(
+    private contracts: ContractsService,
+    private alerts: ContractAlertsService,
+  ) {}
 
   @Get('agencies')
   @CanView('CONTRACT')
@@ -51,6 +55,49 @@ export class ContractsController {
   @CanView('CONTRACT')
   async expiring(@Query('days') days?: string) {
     const data = await this.contracts.listExpiring(days ? parseInt(days, 10) : 90);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Get('alerts/summary')
+  @CanView('CONTRACT')
+  async alertsSummary() {
+    const data = await this.alerts.summary();
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Get('alerts')
+  @CanView('CONTRACT')
+  async listAlerts(
+    @Query('acknowledged') acknowledged?: string,
+    @Query('severity') severity?: string,
+    @Query('alertType') alertType?: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
+  ) {
+    let ack: boolean | undefined;
+    if (acknowledged === 'true') ack = true;
+    if (acknowledged === 'false') ack = false;
+    const data = await this.alerts.listAlerts({
+      acknowledged: ack,
+      severity,
+      alertType,
+      page,
+      limit,
+    });
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Post('alerts/scan')
+  @RequirePermission({ menuCode: 'CONTRACT', permissionCode: 'APPROVE' })
+  async runAlertScan(@Req() req: any) {
+    const data = await this.alerts.runExpiryScan(req.user?.id);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Post('alerts/:id/acknowledge')
+  @CanEdit('CONTRACT')
+  async acknowledgeAlert(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const data = await this.alerts.acknowledge(id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
