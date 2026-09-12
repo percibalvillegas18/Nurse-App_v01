@@ -446,7 +446,9 @@ export class NursingService {
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
           home_unit: { select: { id: true, code: true, name: true } },
-          user: { select: { username: true, email: true } },
+          // Minimum-necessary: the list only needs the login name; the email
+          // address stays on the scope-gated detail endpoint.
+          user: { select: { username: true } },
           credentials: {
             where: { deleted_at: null },
             select: { status: true, expiry_date: true },
@@ -459,7 +461,11 @@ export class NursingService {
       this.prisma.nursing_nurses.count({ where }),
     ]);
 
-    const items = (rows || []).map((r: any) => this.mapNurseRow(r));
+    // Minimum-necessary list projection: omit personal identifiers (DOB,
+    // gender, nationality, phone, email, hire date) that the master table
+    // does not render. Full records are only served by getNurse(), which is
+    // gated per-nurse by the data-scope check.
+    const items = (rows || []).map((r: any) => this.mapNurseSummaryRow(r));
     const totalPages = Math.max(1, Math.ceil(total / limit));
 
     return {
@@ -1174,6 +1180,31 @@ export class NursingService {
     return {
       credentialSummary,
       credentialCounts: { total: active.length, expired, expiringSoon },
+    };
+  }
+
+  /**
+   * Minimum-necessary projection for list/search rows: identity + the fields
+   * the master table renders. Personal identifiers (DOB, gender, nationality,
+   * phone, email, hire date) are omitted; getNurse() serves the full record
+   * behind the per-nurse scope check.
+   */
+  private mapNurseSummaryRow(r: any) {
+    return {
+      id: Number(r.id),
+      employeeNumber: r.employee_number,
+      jobNo: r.job_no ?? null,
+      fullName: [r.first_name, r.middle_name, r.last_name].filter(Boolean).join(' '),
+      username: r.user?.username ?? null,
+      primaryRole: r.primary_role
+        ? { id: Number(r.primary_role.id), code: r.primary_role.code, name: r.primary_role.name }
+        : null,
+      homeUnit: r.home_unit
+        ? { id: Number(r.home_unit.id), code: r.home_unit.code, name: r.home_unit.name }
+        : null,
+      employmentType: r.employment_type,
+      status: r.status,
+      ...this.summarizeCredentials(r.credentials || []),
     };
   }
 

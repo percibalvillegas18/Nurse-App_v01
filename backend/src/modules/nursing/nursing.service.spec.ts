@@ -404,6 +404,24 @@ describe('NURSING SERVICE', () => {
       });
     });
 
+    it('list returns a minimal summary; only the scope-gated detail exposes personal identifiers', async () => {
+      const res = await service.listNurses({ page: 1, limit: 10 }, 1);
+      const row = res.items[0];
+      // Minimum-necessary: the table needs identity/role/unit/status only.
+      expect(row.fullName).toBe('Maria Garcia');
+      expect(row.employmentType).toBe('FullTime');
+      expect(row.credentialSummary).toBeDefined();
+      // Personal identifiers are not part of the list projection.
+      for (const key of ['dateOfBirth', 'nationality', 'phone', 'gender', 'email', 'hireDate', 'userId']) {
+        expect(row).not.toHaveProperty(key);
+      }
+      // The detail endpoint still exposes them, behind the per-nurse scope check.
+      const detail = await service.getNurse(row.id, 1);
+      for (const key of ['dateOfBirth', 'nationality', 'phone', 'gender', 'email']) {
+        expect(detail.nurse).toHaveProperty(key);
+      }
+    });
+
     it('returns 404 for unknown nurse and audits nothing', async () => {
       await expect(service.getNurse(999, 1)).rejects.toBeInstanceOf(NotFoundException);
     });
