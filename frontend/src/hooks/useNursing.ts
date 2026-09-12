@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { nursingApi } from '../api/client';
 import {
   Nurse,
+  NurseSummary,
   NurseDetail,
   NurseCredential,
   RosterAssignment,
@@ -35,7 +36,7 @@ export const useNurses = (params: NurseListParams) =>
     queryKey: ['nurses', params],
     queryFn: async () => {
       const response = await nursingApi.getNurses(params);
-      return response.data.data as { items: Nurse[]; pagination: any };
+      return response.data.data as { items: NurseSummary[]; pagination: any };
     },
     placeholderData: (prev) => prev,
   });

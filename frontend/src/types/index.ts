@@ -196,16 +196,31 @@ export type RosterStatus =
   | 'Swapped'
   | 'NoShow';
 
-export interface Nurse {
+/**
+ * Minimum-necessary list projection for the Nurse Master table. Personal
+ * identifiers (DOB, gender, nationality, phone, email, hire date) are omitted
+ * server-side; getNurse() returns the full `Nurse` behind a scope check.
+ */
+export interface NurseSummary {
   id: number;
   /** Manually entered, unique per nurse (distinct from the auto-generated employeeNumber) */
   jobNo: string;
   employeeNumber: string;
+  /** Computed: First + Middle + Last */
+  fullName: string;
+  username: string | null;
+  primaryRole: { id: number; code: string; name: string } | null;
+  homeUnit: { id: number; code: string; name: string } | null;
+  employmentType: EmploymentType;
+  status: NurseStatus;
+  credentialSummary: CredentialSummary;
+  credentialCounts: { total: number; expired: number; expiringSoon: number };
+}
+
+export interface Nurse extends NurseSummary {
   firstName: string;
   middleName: string | null;
   lastName: string;
-  /** Computed: First + Middle + Last */
-  fullName: string;
   gender: 'Male' | 'Female' | null;
   dateOfBirth: string | null;
   nationality: string | null;
@@ -214,14 +229,7 @@ export interface Nurse {
   /** Contact No. (mobile) */
   phone: string | null;
   hireDate: string | null;
-  employmentType: EmploymentType;
-  status: NurseStatus;
   userId: number | null;
-  username: string | null;
-  primaryRole: { id: number; code: string; name: string } | null;
-  homeUnit: { id: number; code: string; name: string } | null;
-  credentialSummary: CredentialSummary;
-  credentialCounts: { total: number; expired: number; expiringSoon: number };
   createdAt: string;
   updatedAt: string;
 }

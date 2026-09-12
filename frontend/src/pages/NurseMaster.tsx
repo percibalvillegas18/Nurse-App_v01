@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Table,
   Card,
@@ -43,7 +43,7 @@ import {
   credentialSummaryMeta,
   rosterStatusColor,
 } from '../hooks/useNursing';
-import { Nurse, NurseCredential } from '../types';
+import { Nurse, NurseSummary, NurseCredential } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -66,9 +66,13 @@ export const NurseMaster: React.FC = () => {
   const { data: expiring } = useExpiringCredentials(30);
 
   const [editing, setEditing] = useState<Nurse | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [viewId, setViewId] = useState<number | null>(null);
   const { data: viewedNurse, isLoading: detailLoading } = useNurse(viewId ?? undefined);
+  // Full record fetched on edit: the list payload is deliberately minimal
+  // (no personal identifiers), so prefill needs the scope-gated detail.
+  const { data: editingNurse, isLoading: editingLoading } = useNurse(editingId ?? undefined);
 
   const createNurse = useCreateNurse();
   const updateNurse = useUpdateNurse();
@@ -83,29 +87,37 @@ export const NurseMaster: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null);
+    setEditingId(null);
     form.resetFields();
     setModalOpen(true);
   };
 
-  const openEdit = (nurse: Nurse) => {
-    setEditing(nurse);
-    form.setFieldsValue({
-      jobNo: nurse.jobNo,
-      firstName: nurse.firstName,
-      middleName: nurse.middleName,
-      lastName: nurse.lastName,
-      gender: nurse.gender,
-      dateOfBirth: nurse.dateOfBirth ? dayjs(nurse.dateOfBirth) : null,
-      nationality: nurse.nationality,
-      contactNo: nurse.phone,
-      primaryRoleId: nurse.primaryRole?.id,
-      employmentType: nurse.employmentType,
-      hireDate: nurse.hireDate ? dayjs(nurse.hireDate) : null,
-      homeUnitId: nurse.homeUnit?.id,
-      status: nurse.status,
-    });
+  const openEdit = (nurse: NurseSummary) => {
+    setEditing(null);
+    setEditingId(nurse.id);
     setModalOpen(true);
   };
+
+  // Prefill the form once the full record for the nurse being edited arrives.
+  useEffect(() => {
+    if (!modalOpen || editingId == null || !editingNurse) return;
+    setEditing(editingNurse);
+    form.setFieldsValue({
+      jobNo: editingNurse.jobNo,
+      firstName: editingNurse.firstName,
+      middleName: editingNurse.middleName,
+      lastName: editingNurse.lastName,
+      gender: editingNurse.gender,
+      dateOfBirth: editingNurse.dateOfBirth ? dayjs(editingNurse.dateOfBirth) : null,
+      nationality: editingNurse.nationality,
+      contactNo: editingNurse.phone,
+      primaryRoleId: editingNurse.primaryRole?.id,
+      employmentType: editingNurse.employmentType,
+      hireDate: editingNurse.hireDate ? dayjs(editingNurse.hireDate) : null,
+      homeUnitId: editingNurse.homeUnit?.id,
+      status: editingNurse.status,
+    });
+  }, [modalOpen, editingId, editingNurse, form]);
 
   const submit = async () => {
     const values = await form.validateFields();
@@ -134,12 +146,14 @@ export const NurseMaster: React.FC = () => {
         message.success(`${computedFullName || 'Nurse'} registered as ${created.employeeNumber}`);
       }
       setModalOpen(false);
+      setEditing(null);
+      setEditingId(null);
     } catch (e: any) {
       message.error(apiError(e, 'Save failed'));
     }
   };
 
-  const handleDelete = async (nurse: Nurse) => {
+  const handleDelete = async (nurse: NurseSummary) => {
     try {
       await deleteNurse.mutateAsync(nurse.id);
       message.success(`${nurse.fullName} deleted`);
@@ -183,7 +197,7 @@ export const NurseMaster: React.FC = () => {
       dataIndex: 'jobNo',
       key: 'jobno',
       width: 128,
-      render: (jobNo: string, nurse: Nurse) => (
+      render: (jobNo: string, nurse: NurseSummary) => (
         <Space direction="vertical" size={0}>
           <Text strong>{jobNo ?? '—'}</Text>
           <Text type="secondary" style={{ fontSize: 11 }}>{nurse.employeeNumber}</Text>
@@ -194,7 +208,7 @@ export const NurseMaster: React.FC = () => {
       title: 'Name',
       dataIndex: 'fullName',
       key: 'name',
-      render: (name: string, nurse: Nurse) => (
+      render: (name: string, nurse: NurseSummary) => (
         <Space direction="vertical" size={0}>
           <Text strong>{name}</Text>
           {nurse.username && <Text type="secondary" style={{ fontSize: 11 }}>@{nurse.username}</Text>}
@@ -205,13 +219,13 @@ export const NurseMaster: React.FC = () => {
       title: 'Role',
       dataIndex: ['primaryRole', 'code'],
       key: 'role',
-      render: (_: any, nurse: Nurse) =>
+      render: (_: any, nurse: NurseSummary) =>
         nurse.primaryRole ? <Tag color="blue">{nurse.primaryRole.code}</Tag> : '—',
     },
     {
       title: 'Unit',
       key: 'unit',
-      render: (_: any, nurse: Nurse) => nurse.homeUnit?.code ?? '—',
+      render: (_: any, nurse: NurseSummary) => nurse.homeUnit?.code ?? '—',
     },
     {
       title: 'Type',
@@ -231,7 +245,7 @@ export const NurseMaster: React.FC = () => {
       title: 'Credentials',
       dataIndex: 'credentialSummary',
       key: 'creds',
-      render: (summary: string, nurse: Nurse) => {
+      render: (summary: string, nurse: NurseSummary) => {
         const meta = credentialSummaryMeta[summary] || credentialSummaryMeta.None;
         return (
           <Tooltip
@@ -248,7 +262,7 @@ export const NurseMaster: React.FC = () => {
       title: 'Action',
       key: 'action',
       width: 200,
-      render: (_: any, nurse: Nurse) => (
+      render: (_: any, nurse: NurseSummary) => (
         <Space>
           {canView && (
             <Button size="small" icon={<EyeOutlined />} onClick={() => setViewId(nurse.id)}>
@@ -355,10 +369,15 @@ export const NurseMaster: React.FC = () => {
 
       {/* Create / Edit modal - personal info entry */}
       <Modal
-        title={editing ? `Edit ${editing.fullName}` : 'Add Nurse'}
+        title={editing ? `Edit ${editing.fullName}` : editingId ? 'Edit nurse…' : 'Add Nurse'}
         open={modalOpen}
         onOk={submit}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => {
+          setModalOpen(false);
+          setEditing(null);
+          setEditingId(null);
+        }}
+        okButtonProps={{ disabled: editingId != null && (editingLoading || !editing) }}
         confirmLoading={createNurse.isPending || updateNurse.isPending}
         destroyOnHidden
         width={640}
