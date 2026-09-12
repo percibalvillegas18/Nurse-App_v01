@@ -351,6 +351,7 @@ model rbac_nursing_units {
   data_scopes   rbac_user_data_scopes[]
   home_nurses   nursing_nurses[]
   roster_assignments nursing_roster_assignments[]
+  contracts     nursing_contracts[]
 
   @@unique([department_id, code])
   @@index([department_id])
