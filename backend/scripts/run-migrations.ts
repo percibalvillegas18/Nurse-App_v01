@@ -1,12 +1,5 @@
 /**
  * Run raw SQL migrations in order, with a persisted history table.
- *
- * Usage:
- *   ts-node scripts/run-migrations.ts                  # apply pending migrations
- *   ts-node scripts/run-migrations.ts --dry-run        # show what would run
- *   ts-node scripts/run-migrations.ts --baseline       # record all as applied without running
- *   ts-node scripts/run-migrations.ts --force          # re-run everything, ignoring history
- *   ts-node scripts/run-migrations.ts --continue-on-error   # old lenient behaviour
  */
 
 import * as fs from 'fs';
@@ -32,6 +25,7 @@ const order = [
   'V3_4__nurse_job_no.sql',
   'V3_5__tamper_proof_audit_logs.sql',
   'V3_6__audit_log_partitioning.sql',
+  'V4_0__contract_master.sql',
 ];
 
 interface Flags {
@@ -69,11 +63,10 @@ async function ensureHistoryTable(client: Client): Promise<void> {
 
 async function run() {
   const flags = parseFlags(process.argv.slice(2));
-
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     if (flags.dryRun) {
-      console.log('ℹ️  DATABASE_URL not set - dry-run shows the configured order only:');
+      console.log('ℹ️  DATABASE_URL not set - dry-run order:');
       order.forEach((f, i) => console.log(`  ${String(i + 1).padStart(2, ' ')}. ${f}`));
       return;
     }
@@ -84,7 +77,6 @@ async function run() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   console.log('✅ Connected to database');
-
   await ensureHistoryTable(client);
 
   const { rows } = await client.query(
@@ -97,18 +89,8 @@ async function run() {
   const missing = order.filter((f) => !fs.existsSync(path.join(migrationsDir, f)));
   if (missing.length > 0) {
     console.error(`❌ Missing migration file(s): ${missing.join(', ')}`);
-    console.error(`   Looked in ${migrationsDir}`);
     await client.end();
     process.exit(1);
-  }
-
-  const untracked = fs
-    .readdirSync(migrationsDir)
-    .filter((f) => f.endsWith('.sql') && !order.includes(f));
-  if (untracked.length > 0) {
-    console.warn(
-      `⚠️  SQL file(s) present but not in the migration order list (they will NOT run): ${untracked.join(', ')}`,
-    );
   }
 
   let appliedCount = 0;
@@ -123,20 +105,10 @@ async function run() {
 
     if (previous && !flags.force) {
       if (previous.status !== 'Success') {
-        console.error(
-          `❌ ${file} is recorded as '${previous.status}' from an earlier run. ` +
-            `Fix the database or re-run with --force.`,
-        );
+        console.error(`❌ ${file} recorded as '${previous.status}'. Fix or use --force.`);
         failures.push(file);
         if (!flags.continueOnError) break;
         continue;
-      }
-      if (previous.checksum !== checksum) {
-        console.warn(
-          `⚠️  ${file} changed after it was applied ` +
-            `(recorded ${previous.checksum}, on disk ${checksum}). ` +
-            `Already-applied migrations should be immutable - add a new one instead.`,
-        );
       }
       skippedCount++;
       continue;
@@ -150,10 +122,12 @@ async function run() {
 
     if (flags.baseline) {
       await client.query(
-        `INSERT INTO public.schema_migrations (filename, checksum, status, applied_by)\n         VALUES ($1, $2, 'Success', $3)\n         ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, status = 'Success'`,
+        `INSERT INTO public.schema_migrations (filename, checksum, status, applied_by)
+         VALUES ($1, $2, 'Success', $3)
+         ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, status = 'Success'`,
         [file, checksum, 'baseline'],
       );
-      console.log(`📌 ${file} baselined (recorded as applied, not executed)`);
+      console.log(`📌 ${file} baselined`);
       appliedCount++;
       continue;
     }
@@ -165,46 +139,34 @@ async function run() {
       await client.query(sql);
       const duration = Date.now() - startedAt;
       await client.query(
-        `INSERT INTO public.schema_migrations (filename, checksum, duration_ms, status, applied_by)\n         VALUES ($1, $2, $3, 'Success', $4)\n         ON CONFLICT (filename) DO UPDATE\n           SET checksum = EXCLUDED.checksum,\n               duration_ms = EXCLUDED.duration_ms,\n               status = 'Success',\n               applied_at = now()`,
+        `INSERT INTO public.schema_migrations (filename, checksum, duration_ms, status, applied_by)
+         VALUES ($1, $2, $3, 'Success', $4)
+         ON CONFLICT (filename) DO UPDATE
+           SET checksum = EXCLUDED.checksum, duration_ms = EXCLUDED.duration_ms,
+               status = 'Success', applied_at = now()`,
         [file, checksum, duration, process.env.USER || 'unknown'],
       );
       await client.query('COMMIT');
       console.log(`✅ ${file} completed in ${duration}ms`);
       appliedCount++;
     } catch (error: any) {
-      const duration = Date.now() - startedAt;
-      console.error(`❌ ${file} failed after ${duration}ms: ${error.message}`);
-      if (error.detail) console.error(`   detail: ${error.detail}`);
-      if (error.hint) console.error(`   hint: ${error.hint}`);
-      if (error.position) console.error(`   position: ${error.position}`);
-
+      console.error(`❌ ${file} failed: ${error.message}`);
       try {
         await client.query('ROLLBACK');
       } catch {
-        // ignore
+        /* ignore */
       }
-
       failures.push(file);
-      if (!flags.continueOnError) {
-        console.error(
-          '\n🛑 Aborting: later migrations depend on this one. ' +
-            'Re-run after fixing, or pass --continue-on-error to use the old lenient behaviour.',
-        );
-        break;
-      }
+      if (!flags.continueOnError) break;
     }
   }
 
   await client.end();
-
   if (failures.length > 0) {
-    console.error(`\n💥 ${failures.length} migration(s) failed: ${failures.join(', ')}`);
+    console.error(`\n💥 Failed: ${failures.join(', ')}`);
     process.exit(1);
   }
-
-  console.log(
-    `\n🎉 Done - ${appliedCount} applied${flags.baseline ? ' (baseline)' : ''}${flags.dryRun ? ' (dry-run)' : ''}, ${skippedCount} already up to date.`,
-  );
+  console.log(`\n🎉 Done - ${appliedCount} applied, ${skippedCount} skipped.`);
 }
 
 run().catch((e) => {
