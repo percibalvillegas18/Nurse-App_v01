@@ -20,15 +20,26 @@ export interface AuditLogInput {
   metadata?: any;
 }
 
+export interface AuditChainBreak {
+  id: bigint | number;
+  expected_prev: string | null;
+  actual_prev: string | null;
+  problem: string;
+}
+
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
 
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * Append-only write. Hash chain (prev_hash / entry_hash) is computed by the
+   * database BEFORE INSERT trigger (V3_5) so the application cannot forge a
+   * consistent chain.
+   */
   async log(input: AuditLogInput) {
     try {
-      // Combine changes and metadata
       const changes = input.changes || input.metadata || null;
 
       const log = await this.prisma.audit_audit_logs.create({
@@ -48,6 +59,7 @@ export class AuditService {
           request_id: input.requestId,
           status: input.status || 'Success',
           error_message: input.errorMessage,
+          // prev_hash + entry_hash are set by trg_audit_hash_chain
         },
       });
 
@@ -67,6 +79,41 @@ export class AuditService {
       ...input,
       status: input.status || 'Denied',
     });
+  }
+
+  /**
+   * Verify the cryptographic hash chain.
+   * Returns an empty array when the chain is intact.
+   * Any returned row indicates tampering or corruption.
+   */
+  async verifyChain(fromId?: number, toId?: number): Promise<AuditChainBreak[]> {
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<AuditChainBreak[]>(
+        `SELECT id, expected_prev, actual_prev, problem
+         FROM audit.verify_audit_chain($1::bigint, $2::bigint)`,
+        fromId ?? null,
+        toId ?? null,
+      );
+      if (rows.length > 0) {
+        this.logger.error(
+          `AUDIT CHAIN INTEGRITY FAILURE: ${rows.length} broken link(s) detected`,
+          JSON.stringify(rows),
+        );
+      }
+      return rows;
+    } catch (error) {
+      this.logger.error(`verifyChain failed: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /** Latest tip of the chain (for monitoring / external mirror). */
+  async getLatestHash(): Promise<{ id: bigint; entry_hash: string } | null> {
+    const row = await this.prisma.audit_audit_logs.findFirst({
+      orderBy: { id: 'desc' },
+      select: { id: true, entry_hash: true },
+    });
+    return row as any;
   }
 
   async getLogs(filters: {
@@ -140,7 +187,6 @@ export class AuditService {
       }),
     ]);
 
-    // Group by action
     const byAction = (await this.prisma.$queryRawUnsafe(
       `SELECT action, COUNT(*) as count FROM audit.audit_logs WHERE created_at >= $1 GROUP BY action ORDER BY count DESC LIMIT 10`,
       since,
