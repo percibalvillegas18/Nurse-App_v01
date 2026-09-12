@@ -1,9 +1,15 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma.service';
 import { resolveJwtSecret } from '../../../config/jwt.env';
+import {
+  resolveSessionConfig,
+  hasPassed,
+  isIdle,
+  shouldTouchLastActivity,
+} from '../session-config';
 
 export interface JwtPayload {
   sub: number; // user id
@@ -16,8 +22,18 @@ export interface JwtPayload {
   exp?: number;
 }
 
+interface SessionTimeWindow {
+  status: string;
+  user_id: bigint | number;
+  expires_at: Date;
+  absolute_timeout_at: Date;
+  last_activity_at: Date;
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
@@ -70,19 +86,29 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Account is locked');
     }
 
-    // Reject tokens whose bound session has been logged out or revoked.
+    // Reject tokens whose bound session has been logged out or revoked, is
+    // past its expiry/absolute timeout, or has been idle beyond the limit.
     // Mock/preview mode keeps sessions in memory, so this is enforced there too.
     if (payload.sessionId) {
-      const session = await this.prisma.auth_sessions.findUnique({
+      const session = (await this.prisma.auth_sessions.findUnique({
         where: { id: payload.sessionId },
-        select: { status: true, user_id: true },
-      });
-      if (!session || session.user_id !== user.id) {
+        select: {
+          status: true,
+          user_id: true,
+          expires_at: true,
+          absolute_timeout_at: true,
+          last_activity_at: true,
+        },
+      })) as SessionTimeWindow | null;
+
+      if (!session || Number(session.user_id) !== user.id) {
         throw new UnauthorizedException('Session no longer exists');
       }
       if (session.status !== 'Active') {
         throw new UnauthorizedException(`Session is ${session.status}`);
       }
+      this.assertSessionWithinTimeWindow(session);
+      await this.touchLastActivityIfDue(payload.sessionId, session.last_activity_at);
     }
 
     // NOTE: do not spread `payload` here. It used to end with `...payload`,
@@ -105,5 +131,43 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       primaryRoleId: user.primary_role_id,
       sessionId: payload.sessionId,
     };
+  }
+
+  /**
+   * Enforce the session time windows server-side (the JWT `exp` alone does not
+   * cover idle time, and refresh tokens outlive the session expiry).
+   */
+  private assertSessionWithinTimeWindow(session: SessionTimeWindow): void {
+    const cfg = resolveSessionConfig((k) => this.configService.get<string>(k));
+    const now = new Date();
+
+    if (hasPassed(session.absolute_timeout_at, now)) {
+      throw new UnauthorizedException('Session absolute timeout reached');
+    }
+    if (hasPassed(session.expires_at, now)) {
+      throw new UnauthorizedException('Session expired');
+    }
+    if (isIdle(session.last_activity_at, now, cfg.idleMs)) {
+      throw new UnauthorizedException('Session idle timeout reached');
+    }
+  }
+
+  /** Best-effort, debounced activity touch (never fail a request over it). */
+  private async touchLastActivityIfDue(
+    sessionId: string,
+    lastActivityAt: Date | null,
+  ): Promise<void> {
+    try {
+      if (shouldTouchLastActivity(lastActivityAt, new Date())) {
+        await this.prisma.auth_sessions.updateMany({
+          where: { id: sessionId, status: 'Active' },
+          data: { last_activity_at: new Date() },
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not update session last_activity_at for ${sessionId}: ${(error as Error).message}`,
+      );
+    }
   }
 }

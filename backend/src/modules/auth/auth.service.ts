@@ -12,6 +12,11 @@ import { PrismaService } from './prisma.service';
 import { resolveJwtSecret } from '../../config/jwt.env';
 import { AuditService } from '../audit/audit.service';
 import {
+  resolveSessionConfig,
+  hasPassed,
+  isIdle,
+} from './session-config';
+import {
   LoginThrottleService,
   LOCK_DURATION_SECONDS,
   MAX_ATTEMPTS_PER_ACCOUNT,
@@ -246,9 +251,10 @@ export class AuthService {
 
     // Create the session first: its id is embedded in both tokens so
     // JwtStrategy can reject them once the session is logged out or revoked.
+    const cfg = resolveSessionConfig((k) => this.configService.get<string>(k));
     const sessionId = `sess_${Date.now()}_${user.id}`;
-    const expiresAt = new Date(Date.now() + 3600 * 1000); // 1h
-    const absoluteTimeoutAt = new Date(Date.now() + 86400 * 1000); // 24h
+    const expiresAt = new Date(Date.now() + cfg.expiryMs); // sliding (extended on refresh)
+    const absoluteTimeoutAt = new Date(Date.now() + cfg.absoluteMs); // hard cap
 
     await this.prisma.auth_sessions.create({
       data: {
@@ -305,7 +311,7 @@ export class AuthService {
       tokens: {
         accessToken,
         refreshToken,
-        expiresIn: 3600,
+        expiresIn: cfg.expiryMs / 1000,
         sessionId,
       },
     };
@@ -361,6 +367,29 @@ export class AuthService {
       if (!session || session.user_id !== user.id || session.status !== 'Active') {
         throw new UnauthorizedException('Session is no longer active');
       }
+
+      const cfg = resolveSessionConfig((k) => this.configService.get<string>(k));
+      const now = new Date();
+
+      // The hard cap and the idle window also end the refresh capability, so
+      // an idle (or over-long) session cannot silently keep minting tokens.
+      if (hasPassed(session.absolute_timeout_at, now)) {
+        throw new UnauthorizedException('Session absolute timeout reached');
+      }
+      if (isIdle(session.last_activity_at, now, cfg.idleMs)) {
+        throw new UnauthorizedException('Session idle timeout reached');
+      }
+
+      // Slide the expiry forward (capped by the absolute timeout) and mark
+      // activity so the refreshed session stays alive while in use.
+      const absoluteDeadline = new Date(session.absolute_timeout_at).getTime();
+      await this.prisma.auth_sessions.update({
+        where: { id: session.id },
+        data: {
+          expires_at: new Date(Math.min(now.getTime() + cfg.expiryMs, absoluteDeadline)),
+          last_activity_at: now,
+        },
+      });
     }
 
     const newPayload = {
@@ -377,9 +406,10 @@ export class AuthService {
       expiresIn: this.configService.get('JWT_EXPIRY', '3600s'),
     });
 
+    const cfg = resolveSessionConfig((k) => this.configService.get<string>(k));
     return {
       accessToken,
-      expiresIn: 3600,
+      expiresIn: cfg.expiryMs / 1000,
     };
   }
 
