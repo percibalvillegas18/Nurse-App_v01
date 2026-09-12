@@ -20,6 +20,7 @@ import {
   message,
   Tooltip,
   Empty,
+  Divider,
 } from 'antd';
 import {
   PlusOutlined,
@@ -98,6 +99,9 @@ export const NurseMaster: React.FC = () => {
       nationality: nurse.nationality,
       contactNo: nurse.phone,
       primaryRoleId: nurse.primaryRole?.id,
+      employmentType: nurse.employmentType,
+      hireDate: nurse.hireDate ? dayjs(nurse.hireDate) : null,
+      homeUnitId: nurse.homeUnit?.id,
       status: nurse.status,
     });
     setModalOpen(true);
@@ -115,6 +119,9 @@ export const NurseMaster: React.FC = () => {
       nationality: values.nationality,
       phone: values.contactNo || undefined,
       primary_role_id: values.primaryRoleId,
+      employment_type: values.employmentType,
+      hire_date: values.hireDate ? values.hireDate.format('YYYY-MM-DD') : undefined,
+      home_unit_id: values.homeUnitId,
     };
 
     try {
@@ -439,6 +446,35 @@ export const NurseMaster: React.FC = () => {
             </Col>
           </Row>
 
+          <Divider orientation="left" plain style={{ margin: '4px 0 12px' }}>
+            Employment
+          </Divider>
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="employmentType" label="Employment Type" initialValue="FullTime" rules={[{ required: true, message: 'Required' }]}>
+                <Select
+                  placeholder="Select type"
+                  options={['FullTime', 'PartTime', 'PRN', 'Contract'].map((t) => ({ value: t, label: t }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="hireDate" label="Hire Date">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="homeUnitId" label="Home Unit">
+                <Select
+                  placeholder="Select unit"
+                  allowClear
+                  options={(lookups?.units ?? []).map((u) => ({ value: u.id, label: `${u.name} (${u.code})` }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
           {editing && (
             <Form.Item name="status" label="Status" style={{ marginBottom: 8 }}>
               <Select
@@ -454,7 +490,7 @@ export const NurseMaster: React.FC = () => {
             message={
               editing
                 ? `Job No.: ${editing.jobNo ?? '—'} • Employee #: ${editing.employeeNumber}${editing.email ? ' • Email (from user account): ' + editing.email : ''}`
-                : 'Employee # is auto-generated on save; Job No. is the one identifier you type, and it must be unique. The email address comes from the user account. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
+                : 'Employee # is auto-generated on save; Job No. is the one identifier you type, and it must be unique. The email address comes from the user account. Personal info is collected above; the Employment group captures type, hire date and home unit.'
             }
           />
         </Form>
@@ -487,6 +523,8 @@ export const NurseMaster: React.FC = () => {
               <Descriptions.Item label="Contact No.">{viewedNurse.phone ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Email">{viewedNurse.email ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Primary Role">{viewedNurse.primaryRole?.name ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Employment Type">{viewedNurse.employmentType}</Descriptions.Item>
+              <Descriptions.Item label="Hire Date">{viewedNurse.hireDate ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Home Unit">{viewedNurse.homeUnit?.name ?? '—'}</Descriptions.Item>
             </Descriptions>
 
