@@ -146,3 +146,36 @@ export const auditApi = {
   getStatistics: (period = '7days') =>
     apiClient.get(`/audit/statistics?period=${period}`),
 };
+
+// ============================================================================
+// Nursing domain API (Nest /nursing/*)
+// ============================================================================
+export const nursingApi = {
+  // Lookups
+  getLookups: () => apiClient.get('/nursing/lookups'),
+
+  // Nurses
+  getNurses: (params?: any) => apiClient.get('/nursing/nurses', { params }),
+  getNurse: (id: number) => apiClient.get(`/nursing/nurses/${id}`),
+  createNurse: (data: any) => apiClient.post('/nursing/nurses', data),
+  updateNurse: (id: number, data: any) => apiClient.patch(`/nursing/nurses/${id}`, data),
+  deleteNurse: (id: number) => apiClient.delete(`/nursing/nurses/${id}`),
+
+  // Credentials
+  getNurseCredentials: (nurseId: number) =>
+    apiClient.get(`/nursing/nurses/${nurseId}/credentials`),
+  getExpiringCredentials: (days = 30) =>
+    apiClient.get('/nursing/credentials/expiring', { params: { days } }),
+  createCredential: (data: any) => apiClient.post('/nursing/credentials', data),
+  updateCredential: (id: number, data: any) =>
+    apiClient.patch(`/nursing/credentials/${id}`, data),
+  verifyCredential: (id: number, status = 'Valid') =>
+    apiClient.post(`/nursing/credentials/${id}/verify`, { status }),
+
+  // Roster
+  getRoster: (params?: any) => apiClient.get('/nursing/roster', { params }),
+  createAssignment: (data: any) => apiClient.post('/nursing/roster', data),
+  updateAssignment: (id: number, data: any) =>
+    apiClient.patch(`/nursing/roster/${id}`, data),
+  deleteAssignment: (id: number) => apiClient.delete(`/nursing/roster/${id}`),
+};

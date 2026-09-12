@@ -76,6 +76,31 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.isConnected;
   }
 
+  /**
+   * Real Redis health check - issues a PING and measures latency.
+   * Note: Redis being down is NOT fatal (cache fails open to DB),
+   * so callers should treat 'error' as degraded, not down.
+   */
+  async healthCheck(): Promise<{
+    status: 'ok' | 'error';
+    latencyMs: number;
+    error?: string;
+  }> {
+    if (!this.isReady()) {
+      return { status: 'error', latencyMs: 0, error: 'not connected' };
+    }
+    const start = Date.now();
+    try {
+      const pong = await this.client.ping();
+      if (pong !== 'PONG') {
+        return { status: 'error', latencyMs: Date.now() - start, error: `unexpected reply: ${pong}` };
+      }
+      return { status: 'ok', latencyMs: Date.now() - start };
+    } catch (error: any) {
+      return { status: 'error', latencyMs: Date.now() - start, error: error.message };
+    }
+  }
+
   // ========================================================================
   // Generic cache methods
   // ========================================================================

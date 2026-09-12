@@ -11,10 +11,11 @@ Nurse-App_v01/
 ├── Effective Access Function + Role Model...txt  # V2 Phase 0 spec (authoritative)
 ├── docker-compose.yml                            # Postgres + Redis + pgAdmin + Backend
 ├── backend/                                      # NestJS backend
+│   ├── mock-server.js                            # Express mock API - DEMO/PREVIEW ONLY, never deploy
 │   ├── src/
 │   │   ├── main.ts
 │   │   ├── app.module.ts
-│   │   ├── health.controller.ts
+│   │   ├── health.controller.ts                  # Real DB/Redis readiness checks
 │   │   ├── common/
 │   │   │   ├── guards/rbac.guard.ts              # Core authorization guard
 │   │   │   ├── decorators/require-permission.decorator.ts
@@ -35,12 +36,22 @@ Nurse-App_v01/
 │   │   ├── V2_2__rbac_tables_role_updates.sql
 │   │   ├── V2_3__seed_hospital_roles_and_users.sql
 │   │   ├── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
-│   │   └── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
+│   │   ├── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
+│   │   ├── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
+│   │   ├── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
+│   │   └── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
 │   ├── scripts/run-migrations.ts
 │   ├── Dockerfile
 │   ├── package.json
 │   └── README.md
-└── frontend/                                     # TODO: React app
+└── frontend/                                     # React 18 + Vite + Ant Design
+    └── src/
+        ├── api/client.ts                         # Axios w/ JWT + refresh interceptor
+        ├── hooks/useEffectiveAccess.ts           # usePermission(menu, perm)
+        ├── context/AuthContext.tsx
+        └── pages/                                # Login, Dashboard, NurseMaster,
+                                                  # Roster, RBAC admin (Roles,
+                                                  # EffectiveAccess, AuditLogs, CacheStats)
 ```
 
 ## Quick Start (Docker)
@@ -76,6 +87,9 @@ psql $DATABASE_URL -f database/migrations/V2_2__rbac_tables_role_updates.sql
 psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sql
 psql $DATABASE_URL -f database/migrations/V2_4__seed_rbac_configuration.sql
 psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sql
+psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
+psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
+psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
 
 # Or use script
 npx ts-node scripts/run-migrations.ts
@@ -125,11 +139,39 @@ WHERE role_code = ANY(v_all_role_codes)
 ```
 
 ## Next Steps
-- Frontend React app
-- Nursing domain (nurses, rosters, credentials)
-- Redis caching with invalidation
+- Leave management + workforce analytics domains
 - MFA, RLS hardening, audit partitioning
 - Load testing
+
+## Done Recently
+- ✅ User Management (Administration): real page replacing the TODO stub.
+  Nest `UsersModule` (list/get/lookups + create/edit + deactivate/reactivate +
+  admin-set password reset + per-user unlock + sessions & login history,
+  RBAC `USER_MANAGEMENT`, audit trail USER_CREATED/UPDATED/DEACTIVATED/
+  REACTIVATED/PASSWORD_RESET/UNLOCKED, 9 unit tests). Mock-server parity:
+  per-user passwords, suspended users can't log in, login-history/sessions
+  endpoints. Per user spec: standard fields only (no schema change),
+  primary + additional roles, unlock clears per-user counters only
+  (GLOBAL lockout counter unchanged)
+- ✅ Test preview = mock server (decision: option A). The arena test server runs
+  `backend/mock-server.js` (in-memory, no Postgres) + Vite frontend; no real DB
+  is connected. Note: sandbox snapshots exclude `node_modules` — if the preview
+  dies after a restore, run `npm ci` in `frontend/` and `backend/` and restart
+  both processes.
+- ✅ Mock auth realism: `/auth/me` now strict 401 without a valid bearer token;
+  refresh tokens are user-scoped, issued at login, invalidated at logout
+- ✅ Nursing area menus: Contract + Documents added (To Do placeholders);
+  Nurse Master / Credentials / Roster retained; area order per user spec
+- ✅ Nursing domain Phase 1: V3_0 schema (nurses/credentials/roster), V3_1 demo seed,
+  Nest `NursingModule` with RBAC-guarded CRUD (`/api/v1/nursing/*`), double-booking
+  prevention (409), audit logging, unit tests
+- ✅ Frontend wired to live data: NurseMaster (search/pagination/CRUD/drawer),
+  Credentials compliance radar, Roster calendar with day details
+- ✅ Frontend React app (React 18 + Vite + Ant Design)
+- ✅ Redis caching with per-user/per-role invalidation (see REDIS_CACHING.md)
+- ✅ Real `/health/ready` checks: DB `SELECT 1` via Prisma, Redis `PING`, 503 when DB down
+- ✅ CI workflow (`.github/workflows/ci.yml`): backend (npm ci, prisma generate, tsc, jest) + frontend (npm ci, tsc, build)
+- ✅ Lockfiles committed for reproducible `npm ci`
 
 ## Docs
 - See `ANALYSIS.md` for deep analysis

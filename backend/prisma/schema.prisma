@@ -10,7 +10,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["auth", "rbac", "audit", "system", "public"]
+  schemas  = ["auth", "rbac", "audit", "system", "nursing", "public"]
 }
 
 // ============================================================================
@@ -41,6 +41,8 @@ model auth_users {
   user_role_assignments     auth_user_role_assignments[] @relation("UserAssignments")
   sessions                  auth_sessions[]
   data_scopes               rbac_user_data_scopes[]
+  nurse_record              nursing_nurses? @relation("NurseUser")
+  verified_credentials      nursing_credentials[] @relation("CredentialVerifier")
 
   @@index([primary_role_id])
   @@index([status])
@@ -125,6 +127,7 @@ model system_hospital_roles {
   assignments           auth_user_role_assignments[]
   role_menu_access      rbac_role_menu_access[]
   role_permissions      rbac_role_permissions[]
+  nurses_primary_role   nursing_nurses[]
 
   @@index([category])
   @@index([status])
@@ -354,6 +357,8 @@ model rbac_nursing_units {
   department    rbac_departments @relation(fields: [department_id], references: [id])
   posts         rbac_posts[]
   data_scopes   rbac_user_data_scopes[]
+  home_nurses   nursing_nurses[]
+  roster_assignments nursing_roster_assignments[]
 
   @@unique([department_id, code])
   @@index([department_id])
@@ -373,6 +378,7 @@ model rbac_posts {
 
   nursing_unit    rbac_nursing_units @relation(fields: [nursing_unit_id], references: [id])
   data_scopes     rbac_user_data_scopes[]
+  roster_assignments nursing_roster_assignments[]
 
   @@unique([nursing_unit_id, code])
   @@index([nursing_unit_id])
@@ -392,6 +398,7 @@ model rbac_shifts {
   updated_at  DateTime @default(now()) @updatedAt @db.Timestamp()
 
   data_scopes rbac_user_data_scopes[]
+  roster_assignments nursing_roster_assignments[]
 
   @@map("shifts")
   @@schema("rbac")
@@ -462,4 +469,103 @@ model audit_audit_logs {
   @@index([created_at(sort: Desc)])
   @@map("audit_logs")
   @@schema("audit")
+}
+
+// ============================================================================
+// NURSING SCHEMA (V3_0 - Phase 1: master data)
+// ============================================================================
+
+model nursing_nurses {
+  id              BigInt    @id @default(autoincrement())
+  employee_number String    @unique @db.VarChar(50)
+  user_id         BigInt?   @unique
+  first_name      String    @db.VarChar(100)
+  middle_name     String?   @db.VarChar(100)
+  last_name       String    @db.VarChar(100)
+  gender          String?   @db.VarChar(50) // nursing.gender enum (Male | Female)
+  date_of_birth   DateTime? @db.Date
+  nationality     String?   @db.VarChar(100)
+  phone           String?   @db.VarChar(50)
+  hire_date       DateTime? @db.Date
+  employment_type String    @default("FullTime") @db.VarChar(50) // nursing.employment_type enum
+  primary_role_id BigInt?
+  home_unit_id    BigInt?
+  status          String    @default("Active") @db.VarChar(50) // nursing.nurse_status enum
+  created_by      BigInt?
+  created_at      DateTime  @default(now()) @db.Timestamp()
+  updated_by      BigInt?
+  updated_at      DateTime  @default(now()) @updatedAt @db.Timestamp()
+  deleted_at      DateTime? @db.Timestamp()
+
+  user            auth_users? @relation("NurseUser", fields: [user_id], references: [id], onDelete: SetNull)
+  primary_role    system_hospital_roles? @relation(fields: [primary_role_id], references: [id], onDelete: Restrict)
+  home_unit       rbac_nursing_units? @relation(fields: [home_unit_id], references: [id], onDelete: SetNull)
+  credentials     nursing_credentials[]
+  roster_assignments nursing_roster_assignments[]
+
+  @@index([user_id])
+  @@index([primary_role_id])
+  @@index([home_unit_id])
+  @@index([status])
+  @@index([last_name, first_name])
+  @@map("nurses")
+  @@schema("nursing")
+}
+
+model nursing_credentials {
+  id                BigInt    @id @default(autoincrement())
+  nurse_id          BigInt
+  credential_type   String    @db.VarChar(50) // nursing.credential_type enum
+  name              String    @db.VarChar(100) // e.g. RN_LICENSE, BLS, ACLS, PALS
+  issuing_authority String?   @db.VarChar(255)
+  credential_number String?   @db.VarChar(100)
+  issued_date       DateTime? @db.Date
+  expiry_date       DateTime? @db.Date
+  status            String    @default("PendingVerification") @db.VarChar(50) // nursing.credential_status enum
+  verified_by       BigInt?
+  verified_at       DateTime? @db.Timestamp()
+  created_by        BigInt?
+  created_at        DateTime  @default(now()) @db.Timestamp()
+  updated_by        BigInt?
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamp()
+  deleted_at        DateTime? @db.Timestamp()
+
+  nurse             nursing_nurses @relation(fields: [nurse_id], references: [id], onDelete: Cascade)
+  verifier          auth_users? @relation("CredentialVerifier", fields: [verified_by], references: [id], onDelete: SetNull)
+
+  @@unique([nurse_id, credential_type, name])
+  @@index([nurse_id])
+  @@index([status])
+  @@index([expiry_date])
+  @@map("credentials")
+  @@schema("nursing")
+}
+
+model nursing_roster_assignments {
+  id              BigInt    @id @default(autoincrement())
+  nurse_id        BigInt
+  nursing_unit_id BigInt
+  shift_id        BigInt
+  post_id         BigInt?
+  assignment_date DateTime  @db.Date
+  status          String    @default("Scheduled") @db.VarChar(50) // nursing.roster_status enum
+  notes           String?   @db.Text
+  created_by      BigInt?
+  created_at      DateTime  @default(now()) @db.Timestamp()
+  updated_by      BigInt?
+  updated_at      DateTime  @default(now()) @updatedAt @db.Timestamp()
+  deleted_at      DateTime? @db.Timestamp()
+
+  nurse           nursing_nurses @relation(fields: [nurse_id], references: [id], onDelete: Cascade)
+  nursing_unit    rbac_nursing_units @relation(fields: [nursing_unit_id], references: [id], onDelete: Restrict)
+  shift           rbac_shifts @relation(fields: [shift_id], references: [id], onDelete: Restrict)
+  post            rbac_posts? @relation(fields: [post_id], references: [id], onDelete: SetNull)
+
+  @@unique([nurse_id, assignment_date, shift_id])
+  @@index([nurse_id])
+  @@index([assignment_date])
+  @@index([nursing_unit_id, assignment_date])
+  @@index([status])
+  @@map("roster_assignments")
+  @@schema("nursing")
 }
