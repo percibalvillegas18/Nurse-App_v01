@@ -12,14 +12,27 @@ const app = express();
 // Fix for Arena preview: allow all origins, allow iframe embedding, allow preview host
 app.use(cors({ origin: true, credentials: true }));
 app.use((req, res, next) => {
+  // Allow iframe embedding by simply NOT sending X-Frame-Options.
+  // ('ALLOWALL' is not a valid token - browsers ignore it, so it never worked.)
   res.removeHeader('X-Frame-Options');
-  res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Request-Id,X-Session-Id');
   next();
 });
 app.use(express.json());
+
+// ── DEV: Request logger (Patch 1) ────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    // req.originalUrl, not req.path: inside a mounted middleware req.path has
+    // the mount prefix stripped, so every 401 logged as just "/".
+    console.log(`[MOCK] ${req.method} ${req.originalUrl} → ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
 
 // Mock users - matches V2_3 seed
 const mockUsers = {
@@ -161,12 +174,54 @@ let lastLoggedInUser = mockUsers['admin.system'];
 // /auth/me is strict (valid bearer only); /auth/refresh-token only accepts
 // tokens in this map; logout invalidates them -> clean sign-out behavior.
 const issuedRefreshTokens = new Map(); // token -> userId
+const issuedAccessTokens = new Map();  // token -> userId (populated on login)
 
-// --- LOGIN ATTEMPT COUNTER (5 attempts -> 10 min lock) - GLOBAL COUNTER (user requested) ---
+// ── DEV: Auth middleware — require a valid Bearer token on protected routes ──
+// (Patch 2, corrected: also covers /auth/attempts* and /auth/reset-attempts,
+//  which the original patch left anonymous. /auth/login, /auth/me,
+//  /auth/refresh-token and /auth/logout keep their own per-route checks.)
+function requireMockAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
+  if (!token || !issuedAccessTokens.has(token)) {
+    return res.status(401).json({
+      success: false,
+      error: 'UNAUTHORIZED',
+      errorCode: 'TOKEN_REQUIRED',
+      message: 'Missing or invalid token. Please login first.',
+      timestamp: new Date().toISOString(),
+    });
+  }
+  req.mockUserId = issuedAccessTokens.get(token);
+  next();
+}
+for (const protectedPath of [
+  '/api/v1/users',
+  '/api/v1/nursing',
+  '/api/v1/rbac',
+  '/api/v1/audit',
+  '/api/v1/cache',
+  '/api/v1/auth/attempts',
+  '/api/v1/auth/reset-attempts',
+]) {
+  app.use(protectedPath, requireMockAuth);
+}
+
+// --- LOGIN ATTEMPT COUNTER (Patch 3: per-account, no global lockout) --------
+// A single global counter meant 5 anonymous failures locked out every account
+// in the hospital for 10 minutes - a one-request DoS.
+//
+// Now:
+//   * a KNOWN account is throttled on its own counter only (5 fails -> 10 min).
+//     One person's typos can never lock anyone else out.
+//   * an UNKNOWN username is throttled per client IP, at a much higher
+//     threshold (20 fails -> 10 min), purely to slow username enumeration.
+//     The high threshold matters because a whole hospital can share one NAT
+//     egress IP - a tight IP lock would be the global lockout again.
 const MAX_ATTEMPTS = 5;
-const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes as requested
-const loginAttempts = {}; // username -> { count, lockedUntil, lastAttemptAt } - kept for per-user display but also global
-let globalAttempts = { count: 0, lockedUntil: null, lastAttemptAt: null }; // GLOBAL counter - same for username+password errors
+const MAX_ATTEMPTS_PER_IP = 20;
+const LOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+const loginAttempts = {};   // username -> { count, lockedUntil, lastAttemptAt }
+const ipAttempts = {};      // client ip -> { count, lockedUntil, lastAttemptAt }
 
 function getAttemptRecord(username) {
   if (!loginAttempts[username]) {
@@ -175,42 +230,85 @@ function getAttemptRecord(username) {
   return loginAttempts[username];
 }
 
-function isLocked(username) {
-  // Check global lock first - if global locked, all users locked
-  if (globalAttempts.lockedUntil && Date.now() < globalAttempts.lockedUntil) {
-    return true;
+function getIpRecord(ip) {
+  const key = ip || 'unknown';
+  if (!ipAttempts[key]) {
+    ipAttempts[key] = { count: 0, lockedUntil: null, lastAttemptAt: null };
   }
-  if (globalAttempts.lockedUntil && Date.now() >= globalAttempts.lockedUntil) {
-    globalAttempts.count = 0;
-    globalAttempts.lockedUntil = null;
-  }
-  // Also check per-user lock
-  const record = loginAttempts[username];
-  if (!record || !record.lockedUntil) return false;
-  if (Date.now() < record.lockedUntil) return true;
-  // Lock expired, reset
-  record.count = 0;
-  record.lockedUntil = null;
-  return false;
+  return ipAttempts[key];
 }
 
-function getRemainingLockTime(username) {
-  // Global lock takes precedence
-  if (globalAttempts.lockedUntil) {
-    const remaining = globalAttempts.lockedUntil - Date.now();
-    if (remaining > 0) return remaining;
+/** Expire a record in place; returns the (possibly reset) record. */
+function refreshRecord(record) {
+  if (record.lockedUntil && Date.now() >= record.lockedUntil) {
+    record.count = 0;
+    record.lockedUntil = null;
   }
-  const record = loginAttempts[username];
-  if (!record || !record.lockedUntil) return 0;
-  return Math.max(0, record.lockedUntil - Date.now());
+  return record;
 }
 
-function getGlobalAttemptInfo() {
+function getAccountLock(username) {
+  const rec = refreshRecord(loginAttempts[username] || { count: 0, lockedUntil: null });
+  if (rec.lockedUntil && Date.now() < rec.lockedUntil) {
+    return { scope: 'account', remainingMs: rec.lockedUntil - Date.now(), count: rec.count, max: MAX_ATTEMPTS };
+  }
+  return null;
+}
+
+function getIpLock(ip) {
+  const rec = refreshRecord(ipAttempts[ip || 'unknown'] || { count: 0, lockedUntil: null });
+  if (rec.lockedUntil && Date.now() < rec.lockedUntil) {
+    return { scope: 'ip', remainingMs: rec.lockedUntil - Date.now(), count: rec.count, max: MAX_ATTEMPTS_PER_IP };
+  }
+  return null;
+}
+
+function isLocked(username, ip) {
+  return !!(getAccountLock(username) || getIpLock(ip));
+}
+
+function getRemainingLockTime(username, ip) {
+  const lock = getAccountLock(username) || getIpLock(ip);
+  return lock ? lock.remainingMs : 0;
+}
+
+/**
+ * Record one failed attempt. Known accounts are counted against their own
+ * counter; unknown usernames against the client IP (enumeration throttle).
+ * Returns the counters to surface in the response.
+ */
+function registerFailure(username, ip, userExists) {
+  if (userExists) {
+    const byUser = getAttemptRecord(username);
+    byUser.count += 1;
+    byUser.lastAttemptAt = new Date().toISOString();
+    if (byUser.count >= MAX_ATTEMPTS) byUser.lockedUntil = Date.now() + LOCK_DURATION_MS;
+    return {
+      scope: 'account',
+      failedAttempts: byUser.count,
+      remainingAttempts: Math.max(0, MAX_ATTEMPTS - byUser.count),
+      lockedUntil: byUser.lockedUntil ? new Date(byUser.lockedUntil).toISOString() : null,
+      isLocked: !!byUser.lockedUntil,
+    };
+  }
+
+  const byIp = getIpRecord(ip);
+  byIp.count += 1;
+  byIp.lastAttemptAt = new Date().toISOString();
+  if (byIp.count >= MAX_ATTEMPTS_PER_IP) byIp.lockedUntil = Date.now() + LOCK_DURATION_MS;
   return {
-    count: globalAttempts.count,
-    lockedUntil: globalAttempts.lockedUntil,
-    remainingMs: globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0,
+    scope: 'ip',
+    failedAttempts: byIp.count,
+    remainingAttempts: Math.max(0, MAX_ATTEMPTS_PER_IP - byIp.count),
+    lockedUntil: byIp.lockedUntil ? new Date(byIp.lockedUntil).toISOString() : null,
+    isLocked: !!byIp.lockedUntil,
   };
+}
+
+function clientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 const mockMenus = [
@@ -333,21 +431,39 @@ app.get('/', (req, res) => {
     <html>
       <head><title>Nurse-App Mock Backend</title></head>
       <body style="font-family: sans-serif; padding: 20px;">
-        <h1>🚀 Nurse-App Mock Backend Running (FIXED)</h1>
-        <p>Mode: MOCK - No DB/Redis required, for frontend preview</p>
-        <p><strong>FIXED:</strong> Now validates password and returns correct user per username</p>
+        <h1>🚀 Nurse-App Mock Backend</h1>
+        <p>Mode: MOCK &mdash; in-memory, no DB/Redis required. <strong>Demo &amp; preview only; never deploy.</strong></p>
+        <p>Serves the same <code>/api/v1</code> surface as the NestJS backend: auth, users, nursing
+           (nurses / credentials / roster), rbac, audit and cache.</p>
+
+        <h3>Open endpoints (no token)</h3>
         <ul>
-          <li><a href="/api/v1/health">Health Check</a></li>
-          <li><a href="/api/v1/cache/stats">Cache Stats</a></li>
-          <li><a href="/api/v1/rbac/menus/hierarchy?accessibleOnly=true">Menus Hierarchy</a></li>
-          <li><a href="/api/v1/audit/logs">Audit Logs</a></li>
+          <li><a href="/api/v1/health">GET /api/v1/health</a></li>
+          <li><a href="/api/v1/health/ready">GET /api/v1/health/ready</a></li>
+          <li><a href="/api/v1/mock/routes">GET /api/v1/mock/routes</a> &mdash; every registered route</li>
+          <li><a href="/api/v1/mock/state">GET /api/v1/mock/state</a> &mdash; in-memory data counts</li>
+          <li>POST /api/v1/mock/reset &mdash; clear all login counters</li>
+          <li>POST /api/v1/auth/login &mdash; returns the Bearer token everything else needs</li>
         </ul>
-        <p>Frontend should be on port 3000, proxying /api to this backend.</p>
-        <p>Valid logins (password: <code>Password123!</code>):</p>
+
+        <h3>Protected endpoints (Bearer token required)</h3>
+        <p><code>/api/v1/users</code>, <code>/api/v1/nursing</code>, <code>/api/v1/rbac</code>,
+           <code>/api/v1/audit</code>, <code>/api/v1/cache</code>,
+           <code>/api/v1/auth/attempts</code>, <code>/api/v1/auth/reset-attempts</code>
+           &rarr; <code>401 TOKEN_REQUIRED</code> without a valid token from <code>/auth/login</code>.</p>
+
+        <h3>Lockout</h3>
+        <p>${MAX_ATTEMPTS} failed attempts on a known account &rarr; ${Math.round(LOCK_DURATION_MS / 60000)}-minute lock
+           for <strong>that account only</strong>. Unknown usernames are throttled per client IP at
+           ${MAX_ATTEMPTS_PER_IP} attempts (enumeration brake, deliberately loose so a shared
+           hospital NAT can't be locked out). There is no global lockout: one person's typos
+           never lock anyone else out.</p>
+
+        <p>Frontend runs on port 3000 and proxies <code>/api</code> here.</p>
+        <p>Demo logins (password: <code>${DEFAULT_MOCK_PASSWORD}</code>):</p>
         <ul>
           ${Object.keys(mockUsers).map(u => `<li>${u} (${mockUsers[u].role})</li>`).join('')}
         </ul>
-        <p>Wrong password will now return 401 error (fixed).</p>
       </body>
     </html>
   `);
@@ -405,77 +521,72 @@ app.post('/api/v1/auth/login', (req, res) => {
   }
 
   const trimmedUsername = username.trim();
+  const ip = clientIp(req);
 
-  // Check if account is locked due to 5 failed attempts (10 min lock) - GLOBAL lock (same count for username+password errors)
-  if (isLocked(trimmedUsername)) {
-    const remainingMs = getRemainingLockTime(trimmedUsername);
-    const remainingSec = Math.ceil(remainingMs / 1000);
-    const remainingMin = Math.ceil(remainingMs / 60000);
-    const globalInfo = getGlobalAttemptInfo();
-    const record = loginAttempts[trimmedUsername] || { count: globalInfo.count };
-    console.log(`[MOCK] Login BLOCKED for ${trimmedUsername}: GLOBAL locked for ${remainingSec}s, global attempts ${globalInfo.count}/${MAX_ATTEMPTS}, per-user ${record.count || 0}/${MAX_ATTEMPTS}`);
+  // Per-account lockout (known usernames) or per-IP enumeration throttle
+  // (unknown usernames). There is deliberately NO global lockout: one person's
+  // typos must never lock every other account out.
+  const existingLock = getAccountLock(trimmedUsername) || getIpLock(ip);
+  if (existingLock) {
+    const remainingSec = Math.ceil(existingLock.remainingMs / 1000);
+    const remainingMin = Math.ceil(existingLock.remainingMs / 60000);
+    const record = loginAttempts[trimmedUsername] || { count: existingLock.count };
+    console.log(`[MOCK] Login BLOCKED for ${trimmedUsername} from ${ip}: ${existingLock.scope} locked for ${remainingSec}s (${existingLock.count}/${existingLock.max})`);
     return res.status(423).json({
       success: false,
       statusCode: 423,
       error: 'LOCKED',
       errorCode: 'ACCOUNT_LOCKED',
-      message: `Account locked due to ${MAX_ATTEMPTS} failed attempts (username+password errors share same counter). Try again in ${remainingMin} minute(s) (${remainingSec}s). Global count ${globalAttempts.count}/${MAX_ATTEMPTS}. Locked until ${new Date(globalAttempts.lockedUntil || Date.now() + remainingMs).toISOString()}`,
+      message: `Too many failed attempts. Try again in ${remainingMin} minute(s) (${remainingSec}s).`,
       details: {
         username: trimmedUsername,
-        failedAttempts: globalAttempts.count, // GLOBAL count as requested
-        perUserAttempts: record.count || 0,
-        maxAttempts: MAX_ATTEMPTS,
-        lockedUntil: new Date(globalAttempts.lockedUntil || Date.now() + remainingMs).toISOString(),
+        failedAttempts: record.count || existingLock.count,
+        perUserAttempts: record.count || existingLock.count,
+        maxAttempts: existingLock.max,
+        remainingAttempts: 0,
+        lockedUntil: new Date(Date.now() + existingLock.remainingMs).toISOString(),
         remainingSeconds: remainingSec,
         remainingMinutes: remainingMin,
         retryAfter: remainingSec,
-        isGlobal: true,
-        hint: `GLOBAL counter: username+password errors share same count. Wait ${remainingMin} min. Counter resets after lock.`
+        isGlobal: false,
+        lockScope: existingLock.scope,
+        hint: existingLock.scope === 'account'
+          ? `Only this account is locked. Wait ${remainingMin} min, or ask an admin to unlock it.`
+          : `Too many failed attempts from this device. Wait ${remainingMin} min.`,
       },
       timestamp: new Date().toISOString(),
     });
   }
 
-  // Find user first - to give specific username error
-  const user = mockUsers[trimmedUsername] || Object.values(mockUsers).find(u => u.email.toLowerCase() === trimmedUsername.toLowerCase());
-  
-  if (!user) {
-    // GLOBAL counter: username+password errors share same count
-    globalAttempts.count += 1;
-    globalAttempts.lastAttemptAt = new Date().toISOString();
-    if (globalAttempts.count >= MAX_ATTEMPTS) {
-      globalAttempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
-    }
-    // Also track per-user for display
-    const record = getAttemptRecord(trimmedUsername);
-    record.count += 1;
-    record.lastAttemptAt = new Date().toISOString();
-    if (record.count >= MAX_ATTEMPTS) {
-      record.lockedUntil = Date.now() + LOCK_DURATION_MS;
-    }
-    console.log(`[MOCK] Login FAILED: user ${username} not found, GLOBAL attempt ${globalAttempts.count}/${MAX_ATTEMPTS}, per-user ${record.count}/${MAX_ATTEMPTS}`);
+  const user = mockUsers[trimmedUsername]
+    || Object.values(mockUsers).find((u) => u.email.toLowerCase() === trimmedUsername.toLowerCase());
 
-    // If reached max, return LOCKED (same as password case)
-    if (globalAttempts.count >= MAX_ATTEMPTS) {
+  if (!user) {
+    // Unknown username: throttle by client IP only. Never echo the user list -
+    // that turned a login form into a staff directory.
+    const info = registerFailure(trimmedUsername, ip, false);
+    console.log(`[MOCK] Login FAILED: user ${trimmedUsername} not found (ip ${ip} attempt ${info.failedAttempts}/${MAX_ATTEMPTS})`);
+
+    if (info.isLocked) {
+      const remainingSec = Math.ceil(LOCK_DURATION_MS / 1000);
       return res.status(423).json({
         success: false,
         statusCode: 423,
         error: 'LOCKED',
         errorCode: 'ACCOUNT_LOCKED',
-        message: `Username "${trimmedUsername}" not found. GLOBAL Account locked after ${globalAttempts.count}/${MAX_ATTEMPTS} fails (username+password share same). Locked for 10 min until ${new Date(globalAttempts.lockedUntil).toISOString()}`,
+        message: `Too many failed attempts from this device. Try again in ${Math.ceil(LOCK_DURATION_MS / 60000)} minutes.`,
         details: {
           enteredUsername: trimmedUsername,
-          validUsernames: Object.keys(mockUsers),
-          failedAttempts: globalAttempts.count,
-          perUserAttempts: record.count,
+          failedAttempts: info.failedAttempts,
           remainingAttempts: 0,
-          maxAttempts: MAX_ATTEMPTS,
-          lockedUntil: new Date(globalAttempts.lockedUntil).toISOString(),
-          remainingSeconds: 600,
-          remainingMinutes: 10,
-          retryAfter: 600,
-          isGlobal: true,
-          hint: 'GLOBAL counter: any username+password error counts together. Same counter for all.'
+          maxAttempts: MAX_ATTEMPTS_PER_IP,
+          lockedUntil: info.lockedUntil,
+          remainingSeconds: remainingSec,
+          remainingMinutes: Math.ceil(LOCK_DURATION_MS / 60000),
+          retryAfter: remainingSec,
+          isGlobal: false,
+          lockScope: 'ip',
+          hint: 'Too many failures from this IP address.',
         },
         timestamp: new Date().toISOString(),
       });
@@ -486,23 +597,21 @@ app.post('/api/v1/auth/login', (req, res) => {
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'USER_NOT_FOUND',
-      message: `Username "${trimmedUsername}" not found. GLOBAL Attempt ${globalAttempts.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - globalAttempts.count} left before 10-min GLOBAL lock (username+password share same counter).`,
+      message: `Username "${trimmedUsername}" not found. Attempt ${info.failedAttempts}/${MAX_ATTEMPTS}, ${info.remainingAttempts} left.`,
       details: {
         enteredUsername: trimmedUsername,
-        validUsernames: Object.keys(mockUsers),
-        failedAttempts: globalAttempts.count, // GLOBAL as requested
-        perUserAttempts: record.count,
-        remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
-        maxAttempts: MAX_ATTEMPTS,
-        isGlobal: true,
-        willLockAfter: MAX_ATTEMPTS - globalAttempts.count <= 0 ? 'Next fail locks ALL for 10 min' : `${MAX_ATTEMPTS - globalAttempts.count} more fails until GLOBAL lock`,
-        hint: 'GLOBAL counter: any username+password error counts together. Same counter for all.'
+        failedAttempts: info.failedAttempts,
+        remainingAttempts: info.remainingAttempts,
+        maxAttempts: MAX_ATTEMPTS_PER_IP,
+        isGlobal: false,
+        lockScope: 'ip',
+        willLockAfter: `${info.remainingAttempts} more failed attempts from this device`,
+        hint: 'Check the username, or pick a demo account below.',
       },
       timestamp: new Date().toISOString(),
     });
   }
 
-  // Validate password - must be Password123!
   if (user.status && user.status !== 'Active') {
     return res.status(403).json({
       success: false,
@@ -516,83 +625,73 @@ app.post('/api/v1/auth/login', (req, res) => {
   const expectedPassword = mockPasswords[user.username] || DEFAULT_MOCK_PASSWORD;
   if (password !== expectedPassword) {
     recordLoginEvent(user, 'LOGIN_FAILED');
-    // GLOBAL counter
-    globalAttempts.count += 1;
-    globalAttempts.lastAttemptAt = new Date().toISOString();
-    if (globalAttempts.count >= MAX_ATTEMPTS) {
-      globalAttempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
-    }
-    // Per-user also
+    const info = registerFailure(user.username, ip, true);
     const record = getAttemptRecord(user.username);
-    record.count += 1;
-    record.lastAttemptAt = new Date().toISOString();
-    if (record.count >= MAX_ATTEMPTS) {
-      record.lockedUntil = Date.now() + LOCK_DURATION_MS;
-    }
-    
-    if (globalAttempts.count >= MAX_ATTEMPTS) {
-      console.log(`[MOCK] Login FAILED for ${username}: invalid password, GLOBAL LOCKED after ${globalAttempts.count}/${MAX_ATTEMPTS}`);
+
+    if (info.isLocked) {
+      const remainingSec = Math.ceil(LOCK_DURATION_MS / 1000);
+      console.log(`[MOCK] Login FAILED for ${username}: invalid password, LOCKED after ${record.count}/${MAX_ATTEMPTS}`);
       return res.status(423).json({
         success: false,
         statusCode: 423,
         error: 'LOCKED',
         errorCode: 'ACCOUNT_LOCKED',
-        message: `Incorrect password for "${user.username}". GLOBAL Account locked after ${globalAttempts.count} failed attempts (username+password share same counter). Try again in 10 minutes. Locked until ${new Date(globalAttempts.lockedUntil).toISOString()}`,
+        message: `Incorrect password. Account "${user.username}" locked after ${record.count} failed attempts. Try again in ${Math.ceil(LOCK_DURATION_MS / 60000)} minutes.`,
         details: {
           username: user.username,
-          failedAttempts: globalAttempts.count, // GLOBAL
+          failedAttempts: record.count,
           perUserAttempts: record.count,
           maxAttempts: MAX_ATTEMPTS,
           remainingAttempts: 0,
-          lockedUntil: new Date(globalAttempts.lockedUntil).toISOString(),
-          remainingSeconds: 600,
-          remainingMinutes: 10,
-          retryAfter: 600,
-          isGlobal: true,
-          hint: 'GLOBAL counter: username+password errors share same count. Wait 10 min.',
+          lockedUntil: info.lockedUntil,
+          remainingSeconds: remainingSec,
+          remainingMinutes: Math.ceil(LOCK_DURATION_MS / 60000),
+          retryAfter: remainingSec,
+          isGlobal: false,
+          hint: 'Only this account is locked; other users can still sign in.',
         },
         timestamp: new Date().toISOString(),
       });
     }
 
-    console.log(`[MOCK] Login FAILED for ${username}: invalid password, GLOBAL attempt ${globalAttempts.count}/${MAX_ATTEMPTS}, per-user ${record.count}/${MAX_ATTEMPTS}`);
+    console.log(`[MOCK] Login FAILED for ${username}: invalid password, attempt ${info.failedAttempts}/${MAX_ATTEMPTS}`);
     return res.status(401).json({
       success: false,
       statusCode: 401,
       error: 'UNAUTHORIZED',
       errorCode: 'INVALID_PASSWORD',
-      message: `Incorrect password for "${user.username}". GLOBAL Attempt ${globalAttempts.count}/${MAX_ATTEMPTS}. ${MAX_ATTEMPTS - globalAttempts.count} left before 10-min GLOBAL lock (username+password share same).`,
+      message: `Incorrect password for "${user.username}". Attempt ${info.failedAttempts}/${MAX_ATTEMPTS}, ${info.remainingAttempts} left before a ${Math.ceil(LOCK_DURATION_MS / 60000)}-min lock.`,
       details: {
         username: user.username,
-        failedAttempts: globalAttempts.count, // GLOBAL as requested
+        failedAttempts: info.failedAttempts,
         perUserAttempts: record.count,
-        remainingAttempts: MAX_ATTEMPTS - globalAttempts.count,
+        remainingAttempts: info.remainingAttempts,
         maxAttempts: MAX_ATTEMPTS,
-        enteredPasswordLength: password.length,
-        isGlobal: true,
-        willLockAfter: `${MAX_ATTEMPTS - globalAttempts.count} more fails until GLOBAL 10-min lock`,
-        hint: 'GLOBAL counter: any username or password error counts together',
+        isGlobal: false,
+        willLockAfter: `${info.remainingAttempts} more failed attempts on this account`,
+        hint: 'Password is case-sensitive.',
       },
       timestamp: new Date().toISOString(),
     });
   }
 
-  // SUCCESS - reset GLOBAL and per-user counter
-  globalAttempts.count = 0;
-  globalAttempts.lockedUntil = null;
-  globalAttempts.lastAttemptAt = new Date().toISOString();
+  // SUCCESS - clear this account's counter and this IP's counter
   const record = getAttemptRecord(user.username);
   record.count = 0;
   record.lockedUntil = null;
   record.lastAttemptAt = new Date().toISOString();
+  const ipRecord = getIpRecord(ip);
+  ipRecord.count = 0;
+  ipRecord.lockedUntil = null;
 
   recordLoginEvent(user, 'LOGIN_SUCCESS');
-  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}, GLOBAL counter reset`);
+  console.log(`[MOCK] Login SUCCESS for ${username} with role ${user.role}`);
   lastLoggedInUser = user;
 
   const mockToken = `mock_jwt_${user.id}_${user.role}_${Date.now()}`;
   const mockRefreshToken = `mock_refresh_${user.id}_${Date.now()}`;
   issuedRefreshTokens.set(mockRefreshToken, user.id);
+  issuedAccessTokens.set(mockToken, user.id);
 
   res.json({
     success: true,
@@ -619,81 +718,87 @@ app.post('/api/v1/auth/logout', (req, res) => {
     for (const [token, uid] of issuedRefreshTokens) {
       if (uid === userId) issuedRefreshTokens.delete(token);
     }
+    for (const [token, uid] of issuedAccessTokens) {
+      if (uid === userId) issuedAccessTokens.delete(token);
+    }
   }
-  console.log(`[MOCK] Logout for user ${lastLoggedInUser.username}${userId !== null ? ' (refresh tokens invalidated)' : ''}`);
+  console.log(`[MOCK] Logout for user ${lastLoggedInUser.username}${userId !== null ? ' (access + refresh tokens invalidated)' : ''}`);
   res.json({ success: true, message: 'Logout successful (MOCK)', timestamp: new Date().toISOString() });
 });
 
+// Admin/dev utility - protected by requireMockAuth (registered above).
 app.post('/api/v1/auth/reset-attempts', (req, res) => {
   const { username } = req.body || {};
   if (username) {
-    const trimmed = username.trim();
-    if (loginAttempts[trimmed]) {
-      delete loginAttempts[trimmed];
-      console.log(`[MOCK] Reset attempts for ${trimmed}`);
-    }
-    Object.keys(loginAttempts).forEach(key => {
-      if (key.toLowerCase() === trimmed.toLowerCase()) delete loginAttempts[key];
+    const trimmed = String(username).trim();
+    let cleared = 0;
+    Object.keys(loginAttempts).forEach((key) => {
+      if (key.toLowerCase() === trimmed.toLowerCase()) {
+        delete loginAttempts[key];
+        cleared += 1;
+      }
     });
-    // If resetting a user, also decrement global? For global counter, reset all when any user reset for testing
-    // For per-user reset, we keep global but for simplicity reset global if requested user was part of global
-    // User wants global same counter, so reset global when resetting any
-    if (globalAttempts.count > 0) {
-      globalAttempts.count = Math.max(0, globalAttempts.count - 1);
-      if (globalAttempts.count === 0) globalAttempts.lockedUntil = null;
-    }
-    res.json({ success: true, message: `Attempts reset for ${trimmed} (global now ${globalAttempts.count})`, timestamp: new Date().toISOString() });
+    console.log(`[MOCK] Reset attempts for ${trimmed} (${cleared} record(s))`);
+    res.json({
+      success: true,
+      message: `Attempts reset for ${trimmed}`,
+      data: { username: trimmed, cleared },
+      timestamp: new Date().toISOString(),
+    });
   } else {
-    // Reset all - both global and per-user
-    Object.keys(loginAttempts).forEach(k => delete loginAttempts[k]);
-    globalAttempts.count = 0;
-    globalAttempts.lockedUntil = null;
-    globalAttempts.lastAttemptAt = null;
-    console.log(`[MOCK] Reset ALL attempts (global + per-user)`);
-    res.json({ success: true, message: 'All attempts reset (global + per-user)', timestamp: new Date().toISOString() });
+    Object.keys(loginAttempts).forEach((k) => delete loginAttempts[k]);
+    Object.keys(ipAttempts).forEach((k) => delete ipAttempts[k]);
+    console.log(`[MOCK] Reset ALL attempts (per-user + per-IP)`);
+    res.json({
+      success: true,
+      message: 'All attempts reset (per-user + per-IP)',
+      timestamp: new Date().toISOString(),
+    });
   }
 });
 
+// Per-account lockout status. Protected by requireMockAuth: this used to be
+// anonymous and let anyone enumerate which accounts were mid-lockout.
 app.get('/api/v1/auth/attempts/:username', (req, res) => {
   const username = req.params.username;
-  const record = loginAttempts[username] || { count: 0, lockedUntil: null, lastAttemptAt: null };
-  const globalRemainingMs = globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0;
-  const perUserRemainingMs = record.lockedUntil ? Math.max(0, record.lockedUntil - Date.now()) : 0;
-  const remainingMs = Math.max(globalRemainingMs, perUserRemainingMs);
-  const isGlobalLocked = globalRemainingMs > 0;
+  const record = refreshRecord(loginAttempts[username] || { count: 0, lockedUntil: null, lastAttemptAt: null });
+  const remainingMs = record.lockedUntil ? Math.max(0, record.lockedUntil - Date.now()) : 0;
   res.json({
     success: true,
     data: {
       username,
-      failedAttempts: globalAttempts.count, // GLOBAL as requested - same for username+password
+      failedAttempts: record.count,
       perUserAttempts: record.count,
-      remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
+      remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
       maxAttempts: MAX_ATTEMPTS,
       isLocked: remainingMs > 0,
-      isGlobalLocked,
-      lockedUntil: globalAttempts.lockedUntil ? new Date(globalAttempts.lockedUntil).toISOString() : (record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null),
+      isGlobalLocked: false,
+      lockedUntil: record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null,
       remainingSeconds: Math.ceil(remainingMs / 1000),
-      globalCount: globalAttempts.count,
-      isGlobal: true,
+      lastAttemptAt: record.lastAttemptAt,
+      isGlobal: false,
     },
     timestamp: new Date().toISOString(),
   });
 });
 
+// Admin overview of every non-zero counter (per-user and per-IP).
 app.get('/api/v1/auth/attempts', (req, res) => {
-  const globalRemainingMs = globalAttempts.lockedUntil ? Math.max(0, globalAttempts.lockedUntil - Date.now()) : 0;
+  const perUser = Object.entries(loginAttempts)
+    .map(([user, rec]) => ({ user, ...refreshRecord(rec) }))
+    .filter((rec) => rec.count > 0);
+  const perIp = Object.entries(ipAttempts)
+    .map(([ip, rec]) => ({ ip, ...refreshRecord(rec) }))
+    .filter((rec) => rec.count > 0);
   res.json({
     success: true,
     data: {
-      failedAttempts: globalAttempts.count,
-      remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
       maxAttempts: MAX_ATTEMPTS,
-      isLocked: globalRemainingMs > 0,
-      lockedUntil: globalAttempts.lockedUntil ? new Date(globalAttempts.lockedUntil).toISOString() : null,
-      remainingSeconds: Math.ceil(globalRemainingMs / 1000),
-      perUser: loginAttempts,
-      isGlobal: true,
-      message: 'GLOBAL counter - username+password share same count',
+      lockDurationMinutes: Math.round(LOCK_DURATION_MS / 60000),
+      isGlobal: false,
+      perUser,
+      perIp,
+      message: 'Per-account and per-IP counters (no global lockout)',
     },
     timestamp: new Date().toISOString(),
   });
@@ -711,10 +816,13 @@ app.post('/api/v1/auth/refresh-token', (req, res) => {
       timestamp: new Date().toISOString(),
     });
   }
+  const newAccessToken = `mock_jwt_${user.id}_${user.role}_${Date.now()}`;
+  // Register the rotated token so requireMockAuth accepts it.
+  issuedAccessTokens.set(newAccessToken, user.id);
   console.log(`[MOCK] Refresh-token OK for ${user.username}`);
   res.json({
     success: true,
-    data: { accessToken: `mock_jwt_${user.id}_${user.role}_${Date.now()}`, refreshToken, expiresIn: 3600 },
+    data: { accessToken: newAccessToken, refreshToken, expiresIn: 3600 },
     message: 'Token refreshed (MOCK)',
     timestamp: new Date().toISOString(),
   });
@@ -1281,10 +1389,10 @@ const COUNTRIES = [
 ];
 
 const mockNurses = [
-  { id: 1, employeeNumber: 'EMP-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 2, employeeNumber: 'EMP-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 3, employeeNumber: 'EMP-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 4, employeeNumber: 'EMP-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 1, employeeNumber: 'EMP-1001', jobNo: 'JOB-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, employeeNumber: 'EMP-1002', jobNo: 'JOB-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, employeeNumber: 'EMP-1003', jobNo: 'JOB-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, employeeNumber: 'EMP-1004', jobNo: 'JOB-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ];
 
 const mockCredentials = [
@@ -1344,7 +1452,7 @@ function mockUserEmail(userId) {
 }
 function mapMockNurse(n) {
   return {
-    id: n.id, employeeNumber: n.employeeNumber, firstName: n.firstName,
+    id: n.id, employeeNumber: n.employeeNumber, jobNo: n.jobNo || null, firstName: n.firstName,
     middleName: n.middleName || null, lastName: n.lastName,
     // Full Name = First + Middle + Last (middle omitted when not set)
     fullName: [n.firstName, n.middleName, n.lastName].filter(Boolean).join(' '),
@@ -1394,8 +1502,10 @@ app.get('/api/v1/nursing/nurses', (req, res) => {
     rows = rows.filter(
       (n) =>
         n.firstName.toLowerCase().includes(q) ||
+        String(n.middleName || '').toLowerCase().includes(q) ||
         n.lastName.toLowerCase().includes(q) ||
-        n.employeeNumber.toLowerCase().includes(q),
+        n.employeeNumber.toLowerCase().includes(q) ||
+        String(n.jobNo || '').toLowerCase().includes(q),
     );
   }
   const total = rows.length;
@@ -1448,6 +1558,17 @@ app.post('/api/v1/nursing/nurses', (req, res) => {
   if (!b.first_name || !b.last_name) {
     return res.status(400).json({ success: false, message: 'first_name, last_name are required', timestamp: new Date().toISOString() });
   }
+  // Job No. is typed by the user, required, and unique across all nurses
+  const newJobNo = String(b.job_no || '').trim();
+  if (!newJobNo) {
+    return res.status(400).json({ success: false, message: 'job_no is required', timestamp: new Date().toISOString() });
+  }
+  if (newJobNo.length > 50) {
+    return res.status(400).json({ success: false, message: 'job_no must be at most 50 characters', timestamp: new Date().toISOString() });
+  }
+  if (mockNurses.some((n) => String(n.jobNo || '').toLowerCase() === newJobNo.toLowerCase())) {
+    return res.status(409).json({ success: false, message: 'Job No. "' + newJobNo + '" is already used by another nurse', timestamp: new Date().toISOString() });
+  }
   // Employee number auto-generated when omitted (personal-info form does not enter it)
   if (!b.employee_number) {
     const year = new Date().getFullYear();
@@ -1469,6 +1590,7 @@ app.post('/api/v1/nursing/nurses', (req, res) => {
   const created = {
     id: nextNurseId++,
     employeeNumber: b.employee_number,
+    jobNo: newJobNo,
     firstName: b.first_name,
     middleName: b.middle_name || null,
     lastName: b.last_name,
@@ -1499,6 +1621,19 @@ app.patch('/api/v1/nursing/nurses/:id', (req, res) => {
   const b = req.body || {};
   if (b.employee_number && mockNurses.some((n) => n.id !== nurse.id && n.employeeNumber === b.employee_number)) {
     return res.status(409).json({ success: false, message: 'Employee number "' + b.employee_number + '" already exists', timestamp: new Date().toISOString() });
+  }
+  if (b.job_no !== undefined) {
+    const nextJobNo = String(b.job_no || '').trim();
+    if (!nextJobNo) {
+      return res.status(400).json({ success: false, message: 'job_no must not be empty', timestamp: new Date().toISOString() });
+    }
+    if (nextJobNo.length > 50) {
+      return res.status(400).json({ success: false, message: 'job_no must be at most 50 characters', timestamp: new Date().toISOString() });
+    }
+    if (mockNurses.some((n) => n.id !== nurse.id && String(n.jobNo || '').toLowerCase() === nextJobNo.toLowerCase())) {
+      return res.status(409).json({ success: false, message: 'Job No. "' + nextJobNo + '" is already used by another nurse', timestamp: new Date().toISOString() });
+    }
+    nurse.jobNo = nextJobNo;
   }
   if (b.employee_number !== undefined) nurse.employeeNumber = b.employee_number;
   if (b.first_name !== undefined) nurse.firstName = b.first_name;
@@ -1689,6 +1824,51 @@ app.delete('/api/v1/nursing/roster/:id', (req, res) => {
   res.json({ success: true, data: { message: 'Roster assignment #' + asg.id + ' deleted' }, timestamp: new Date().toISOString() });
 });
 
+// ── DEV: Mock introspection endpoints (Patch 5) ──────────────────────────────
+// Not behind requireMockAuth on purpose - they expose no hospital data, only
+// server internals, and they are the fastest way to debug the preview.
+
+// List all registered routes
+app.get('/api/v1/mock/routes', (req, res) => {
+  const routes = [];
+  app._router.stack.forEach((layer) => {
+    if (layer.route) {
+      const method = Object.keys(layer.route.methods)[0].toUpperCase();
+      routes.push({ method, path: layer.route.path });
+    }
+  });
+  res.json({ success: true, data: { count: routes.length, routes }, timestamp: new Date().toISOString() });
+});
+
+// Current in-memory state snapshot
+app.get('/api/v1/mock/state', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      users: Object.keys(mockUsers).length,
+      activeAccessTokens: issuedAccessTokens.size,
+      activeRefreshTokens: issuedRefreshTokens.size,
+      nurses: typeof mockNurses !== 'undefined' ? mockNurses.filter((n) => !n._deleted).length : 'n/a',
+      credentials: typeof mockCredentials !== 'undefined' ? mockCredentials.length : 'n/a',
+      rosterAssignments: typeof mockRoster !== 'undefined' ? mockRoster.filter((r) => r.status !== 'Cancelled').length : 'n/a',
+      loginAttempts: Object.entries(loginAttempts)
+        .map(([user, rec]) => ({ user, ...refreshRecord(rec) }))
+        .filter((rec) => rec.count > 0),
+      ipAttempts: Object.entries(ipAttempts)
+        .map(([ip, rec]) => ({ ip, ...refreshRecord(rec) }))
+        .filter((rec) => rec.count > 0),
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Reset all login counters
+app.post('/api/v1/mock/reset', (req, res) => {
+  Object.keys(loginAttempts).forEach((k) => { delete loginAttempts[k]; });
+  Object.keys(ipAttempts).forEach((k) => { delete ipAttempts[k]; });
+  res.json({ success: true, message: 'All login counters reset (per-user + per-IP)', timestamp: new Date().toISOString() });
+});
+
 // Catch all
 app.use((req, res) => {
   res.status(404).json({
@@ -1701,9 +1881,13 @@ app.use((req, res) => {
 
 const PORT = process.env.API_PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Mock Backend FIXED running on http://0.0.0.0:${PORT}/api/v1`);
-  console.log(`📊 Health: http://0.0.0.0:${PORT}/api/v1/health`);
-  console.log(`🔧 Cache stats: http://0.0.0.0:${PORT}/api/v1/cache/stats`);
-  console.log(`✅ FIXED: Validates password (must be Password123!) and returns correct user per username`);
-  console.log(`👥 Valid users: ${Object.keys(mockUsers).join(', ')}`);
+  const routeCount = app._router.stack.filter((l) => l.route).length;
+  console.log(`🚀 Nurse-App Mock Backend running on http://0.0.0.0:${PORT}/api/v1`);
+  console.log(`📊 Health:        http://0.0.0.0:${PORT}/api/v1/health`);
+  console.log(`🧭 Route list:    http://0.0.0.0:${PORT}/api/v1/mock/routes`);
+  console.log(`🧪 State:         http://0.0.0.0:${PORT}/api/v1/mock/state`);
+  console.log(`🔁 Reset counters: POST http://0.0.0.0:${PORT}/api/v1/mock/reset`);
+  console.log(`📦 ${routeCount} routes | auth required on /users /nursing /rbac /audit /cache /auth/attempts*`);
+  console.log(`🔒 Lockout: ${MAX_ATTEMPTS} fails -> ${Math.round(LOCK_DURATION_MS / 60000)} min PER ACCOUNT | ${MAX_ATTEMPTS_PER_IP} unknown-username fails -> per-IP throttle | no global lockout`);
+  console.log(`👥 Demo users (password ${DEFAULT_MOCK_PASSWORD}): ${Object.keys(mockUsers).join(', ')}`);
 });

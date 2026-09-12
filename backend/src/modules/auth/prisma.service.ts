@@ -6,6 +6,33 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private prismaClient: any = null;
   private isMock = false;
 
+  /**
+   * The in-memory mock exists so the frontend can be previewed without
+   * Postgres/Redis. It is NEVER acceptable in production: while it is active
+   * there is no real user table and no real authorization engine.
+   *
+   * Opt in explicitly with ALLOW_MOCK_DATA=true. Without it, any failure to
+   * initialise or connect throws and the process refuses to serve traffic
+   * (previously it logged a warning and kept serving - see the fail-open note
+   * in docs/REPO_ANALYSIS_2026-09-12.md).
+   */
+  private readonly mockAllowed = String(process.env.ALLOW_MOCK_DATA || '').toLowerCase() === 'true';
+
+  /** True when this instance serves demo/preview data instead of a database. */
+  get isMockData(): boolean {
+    return this.mockAllowed;
+  }
+
+  /** Throw unless the mock data layer has been explicitly opted into. */
+  private assertMockAllowed(context: string): void {
+    if (this.mockAllowed) return;
+    throw new Error(
+      `${context} and the in-memory mock data layer is disabled. ` +
+        `Fix the database connection, or set ALLOW_MOCK_DATA=true to run a demo/preview instance. ` +
+        `Refusing to serve requests without a real database.`,
+    );
+  }
+
   // Mock data for preview when DB not available or client not generated
   private mockData = {
     users: [
@@ -34,6 +61,12 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     ],
   };
 
+  /** In-memory stand-in for auth.sessions while running in mock mode. */
+  private readonly mockSessions: any[] = [];
+
+  /** In-memory audit trail while running in mock mode (newest first). */
+  private readonly mockAuditLogs: any[] = [];
+
   constructor() {
     try {
       // Try to dynamically import PrismaClient - may fail if not generated
@@ -49,7 +82,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       });
       this.logger.log('✅ PrismaClient initialized');
     } catch (error: any) {
-      this.logger.warn(`⚠️ PrismaClient failed to initialize, using MOCK mode for preview: ${error.message}`);
+      this.assertMockAllowed(`PrismaClient failed to initialize (${error.message})`);
+      this.logger.warn(
+        `⚠️ PrismaClient failed to initialize, using MOCK mode because ALLOW_MOCK_DATA=true: ${error.message}`,
+      );
       this.isMock = true;
       this.prismaClient = null;
     }
@@ -57,7 +93,9 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     if (this.isMock || !this.prismaClient) {
-      this.logger.warn('⚠️ Running in MOCK mode - no DB connection');
+      this.logger.warn(
+        '⚠️ Running in MOCK mode - no DB connection. DEMO/PREVIEW ONLY: data is in-memory and authorization decisions come from a hardcoded matrix.',
+      );
       return;
     }
 
@@ -67,8 +105,9 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
       if (process.env.NODE_ENV === 'development') {
         try {
-          // @ts-ignore
-          this.prismaClient.$on('query', (e: any) => {
+          // $on('query') is only typed when the client is constructed with
+          // log: [{ emit: 'event', level: 'query' }], so cast for the listener.
+          (this.prismaClient as any).$on('query', (e: any) => {
             if (e.duration > 100) {
               this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`);
             }
@@ -76,7 +115,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
         } catch {}
       }
     } catch (error: any) {
-      this.logger.warn(`⚠️ Prisma connection failed, switching to MOCK mode: ${error.message}`);
+      this.assertMockAllowed(`Database connection failed (${error.message})`);
+      this.logger.warn(
+        `⚠️ Prisma connection failed, switching to MOCK mode because ALLOW_MOCK_DATA=true: ${error.message}`,
+      );
       this.isMock = true;
       this.prismaClient = null;
     }
@@ -180,9 +222,26 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const client = this.getClient();
     if (client) return client.auth_sessions;
     return {
-      create: async (args: any) => ({ id: args.data.id, ...args.data }),
-      findMany: async () => [],
-      updateMany: async () => ({ count: 1 }),
+      create: async (args: any) => {
+        const record = { ...args.data };
+        this.mockSessions.push(record);
+        return record;
+      },
+      findUnique: async (args: any) =>
+        this.mockSessions.find((s) => s.id === args?.where?.id) ?? null,
+      findMany: async (args: any) =>
+        args?.where?.user_id
+          ? this.mockSessions.filter((s) => s.user_id === args.where.user_id)
+          : [...this.mockSessions],
+      updateMany: async (args: any) => {
+        const matches = this.mockSessions.filter(
+          (s) =>
+            s.id === args?.where?.id &&
+            (args?.where?.user_id === undefined || s.user_id === args.where.user_id),
+        );
+        matches.forEach((s) => Object.assign(s, args?.data));
+        return { count: matches.length };
+      },
     };
   }
 
@@ -293,10 +352,60 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   get audit_audit_logs() {
     const client = this.getClient();
     if (client) return client.audit_audit_logs;
+
+    // In-memory audit trail so the demo/preview Audit Logs page shows the
+    // events this instance actually produced. It used to accept writes and
+    // then return an empty list, so logins and denials vanished.
+    const matches = (row: any, where: any): boolean => {
+      if (!where) return true;
+      for (const [field, condition] of Object.entries<any>(where)) {
+        const value = row[field];
+        if (condition === null || typeof condition !== 'object') {
+          if (value !== condition) return false;
+          continue;
+        }
+        if ('contains' in condition) {
+          const needle = String(condition.contains);
+          const mode = condition.mode;
+          const haystack = mode === 'insensitive' ? String(value ?? '').toLowerCase() : String(value ?? '');
+          const target = mode === 'insensitive' ? needle.toLowerCase() : needle;
+          if (!haystack.includes(target)) return false;
+        }
+        if ('gte' in condition && !(value >= condition.gte)) return false;
+        if ('lte' in condition && !(value <= condition.lte)) return false;
+        if ('gt' in condition && !(value > condition.gt)) return false;
+        if ('lt' in condition && !(value < condition.lt)) return false;
+      }
+      return true;
+    };
+
     return {
-      create: async (args: any) => ({ id: 1, ...args.data, created_at: new Date() }),
-      findMany: async () => [],
-      count: async () => 0,
+      create: async (args: any) => {
+        const row = {
+          id: this.mockAuditLogs.length + 1,
+          ...args?.data,
+          created_at: new Date(),
+        };
+        this.mockAuditLogs.unshift(row); // newest first
+        return row;
+      },
+      findMany: async (args: any) => {
+        let rows = this.mockAuditLogs.filter((r) => matches(r, args?.where));
+        if (args?.orderBy?.created_at === 'desc') {
+          rows = [...rows].sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          );
+        } else if (args?.orderBy?.created_at === 'asc') {
+          rows = [...rows].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          );
+        }
+        const skip = args?.skip ?? 0;
+        const take = args?.take;
+        return typeof take === 'number' ? rows.slice(skip, skip + take) : rows.slice(skip);
+      },
+      count: async (args: any) =>
+        this.mockAuditLogs.filter((r) => matches(r, args?.where)).length,
     };
   }
 
@@ -338,7 +447,10 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Raw query - tries real DB, falls back to mock evaluate_access
+   * Raw query - real DB when connected, hardcoded demo matrix in mock mode.
+   * Falls back to the mock ONLY when mock mode was explicitly opted into;
+   * a query error against a real database is rethrown, never silently
+   * downgraded to a fake ALLOW.
    */
   async $queryRawUnsafe(query: string, ...params: any[]): Promise<any[]> {
     const client = this.getClient();
@@ -346,78 +458,229 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       try {
         return await client.$queryRawUnsafe(query, ...params);
       } catch (error: any) {
-        this.logger.warn(`Raw query failed, falling back to mock: ${error.message} - Query: ${query.substring(0, 100)}`);
+        if (!this.mockAllowed) {
+          this.logger.error(`Raw query failed: ${error.message} - Query: ${query.substring(0, 100)}`);
+          throw error;
+        }
+        this.logger.warn(
+          `Raw query failed, falling back to mock (ALLOW_MOCK_DATA=true): ${error.message} - Query: ${query.substring(0, 100)}`,
+        );
         // Fall through to mock
       }
+    } else {
+      // Safety net: mock mode without the opt-in must never answer a query.
+      this.assertMockAllowed('PrismaService is in MOCK mode');
     }
 
     // Mock implementation for evaluate_access and other functions
     return this.mockQueryRaw(query, params);
   }
 
+  /** Role code for a mock user, mirroring mockData.users[].primary_role_id. */
+  private mockRoleCode(userId: number): string {
+    const user = this.mockData.users.find((u) => u.id === Number(userId));
+    const role = user ? this.mockData.roles.find((r) => r.id === user.primary_role_id) : undefined;
+    return role?.code || 'READONLY_USER';
+  }
+
+  /** Menu code -> id, mirroring the seeded rbac.menus tree (V2_4). */
+  private readonly mockMenuIds: Record<string, number> = {
+    DASHBOARD: 1,
+    NURSING_WORKFORCE: 2,
+    SCHEDULING: 3,
+    WORKFORCE_ANALYTICS: 4,
+    ADMINISTRATION: 5,
+    NURSE_MASTER: 6,
+    CREDENTIALS: 7,
+    NURSE_ROSTER: 9,
+    LEAVE_MANAGEMENT: 10,
+    USER_MANAGEMENT: 11,
+    ROLES_PERMISSIONS: 12,
+    EFFECTIVE_ACCESS: 13,
+    CACHE_STATS: 14,
+    ACCESS_LEVEL_MASTER: 15,
+    MENU_MASTER: 16,
+    AUDIT_LOGS: 17,
+    SYSTEM_SETTINGS: 18,
+    CONTRACT: 19,
+    DOCUMENTS: 20,
+  };
+
+  /**
+   * DEMO authorization matrix, deliberately DENY-by-default.
+   *
+   * This used to return ALLOW for almost everything ("all checks passed
+   * (MOCK REAL BACKEND)"), which meant that whenever the database was
+   * unreachable the RbacGuard waved every request through - an RN could reset
+   * the administrator's password. It now mirrors rbac.evaluate_access():
+   * anything not listed here is denied.
+   */
+  private static readonly MOCK_ROLE_ACCESS: Record<string, Record<string, string[]>> = {
+    SYSTEM_ADMIN: {
+      DASHBOARD: ['VIEW', 'EDIT'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW', 'CREATE', 'EDIT', 'DELETE'],
+      CREDENTIALS: ['VIEW', 'CREATE', 'EDIT', 'VERIFY'],
+      CONTRACT: ['VIEW', 'CREATE', 'EDIT'],
+      DOCUMENTS: ['VIEW', 'CREATE', 'EDIT'],
+      SCHEDULING: ['VIEW'],
+      NURSE_ROSTER: ['VIEW', 'CREATE', 'EDIT', 'DELETE', 'ASSIGN'],
+      LEAVE_MANAGEMENT: ['VIEW', 'CREATE', 'EDIT', 'APPROVE'],
+      WORKFORCE_ANALYTICS: ['VIEW', 'EXPORT'],
+      ADMINISTRATION: ['VIEW'],
+      USER_MANAGEMENT: ['VIEW', 'CREATE', 'EDIT', 'MANAGE'],
+      ROLES_PERMISSIONS: ['VIEW', 'EDIT', 'MANAGE'],
+      EFFECTIVE_ACCESS: ['VIEW'],
+      CACHE_STATS: ['VIEW'],
+      ACCESS_LEVEL_MASTER: ['VIEW', 'MANAGE'],
+      MENU_MASTER: ['VIEW', 'MANAGE'],
+      AUDIT_LOGS: ['VIEW', 'EXPORT'],
+      SYSTEM_SETTINGS: ['VIEW', 'MANAGE'],
+    },
+    NURSE_MANAGER: {
+      DASHBOARD: ['VIEW'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW', 'CREATE', 'EDIT'],
+      CREDENTIALS: ['VIEW', 'VERIFY'],
+      NURSE_ROSTER: ['VIEW', 'CREATE', 'EDIT', 'ASSIGN'],
+      LEAVE_MANAGEMENT: ['VIEW', 'APPROVE'],
+      WORKFORCE_ANALYTICS: ['VIEW'],
+      AUDIT_LOGS: ['VIEW'],
+    },
+    CHARGE_NURSE: {
+      DASHBOARD: ['VIEW'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW', 'EDIT'],
+      CREDENTIALS: ['VIEW'],
+      NURSE_ROSTER: ['VIEW', 'EDIT', 'ASSIGN'],
+      LEAVE_MANAGEMENT: ['VIEW', 'SUBMIT'],
+    },
+    RN: {
+      DASHBOARD: ['VIEW'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW'],
+      CREDENTIALS: ['VIEW'],
+      NURSE_ROSTER: ['VIEW'],
+      LEAVE_MANAGEMENT: ['VIEW', 'SUBMIT'],
+    },
+    LPN: {
+      DASHBOARD: ['VIEW'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW'],
+      NURSE_ROSTER: ['VIEW'],
+      LEAVE_MANAGEMENT: ['VIEW', 'SUBMIT'],
+    },
+    CNA: {
+      DASHBOARD: ['VIEW'],
+      NURSE_ROSTER: ['VIEW'],
+      LEAVE_MANAGEMENT: ['VIEW', 'SUBMIT'],
+    },
+    SCHEDULER: {
+      DASHBOARD: ['VIEW'],
+      NURSE_MASTER: ['VIEW'],
+      SCHEDULING: ['VIEW'],
+      NURSE_ROSTER: ['VIEW', 'CREATE', 'EDIT', 'ASSIGN'],
+      LEAVE_MANAGEMENT: ['VIEW'],
+      WORKFORCE_ANALYTICS: ['VIEW'],
+    },
+    HR_ADMIN: {
+      DASHBOARD: ['VIEW'],
+      NURSING_WORKFORCE: ['VIEW'],
+      NURSE_MASTER: ['VIEW', 'CREATE', 'EDIT'],
+      CREDENTIALS: ['VIEW'],
+      CONTRACT: ['VIEW', 'CREATE', 'EDIT'],
+      DOCUMENTS: ['VIEW', 'CREATE', 'EDIT'],
+      ADMINISTRATION: ['VIEW'],
+      USER_MANAGEMENT: ['VIEW', 'CREATE', 'EDIT'],
+      LEAVE_MANAGEMENT: ['VIEW', 'APPROVE'],
+    },
+    COMPLIANCE_OFFICER: {
+      DASHBOARD: ['VIEW'],
+      NURSE_MASTER: ['VIEW'],
+      CREDENTIALS: ['VIEW', 'VERIFY'],
+      AUDIT_LOGS: ['VIEW', 'EXPORT'],
+      WORKFORCE_ANALYTICS: ['VIEW'],
+    },
+    READONLY_USER: {
+      DASHBOARD: ['VIEW'],
+    },
+  };
+
   private mockQueryRaw(query: string, params: any[]): any[] {
     this.logger.debug(`MOCK query: ${query.substring(0, 150)}... params: ${JSON.stringify(params)}`);
 
     if (query.includes('rbac.evaluate_access')) {
       const [userId, menuCode, permissionCode] = params;
-      const isAdmin = userId === 1 || userId === 7;
-      const isRestricted = ['USER_MANAGEMENT', 'SYSTEM_SETTINGS', 'ROLES_PERMISSIONS'].includes(menuCode);
-      const isSensitive = ['DELETE', 'MANAGE'].includes(permissionCode);
+      const roleCode = this.mockRoleCode(userId);
+      const granted = PrismaService.MOCK_ROLE_ACCESS[roleCode] || {};
+      const allowedPerms = granted[menuCode] || [];
+      const menuAccessible = allowedPerms.length > 0;
+      const permissionGranted = allowedPerms.includes(permissionCode);
+      const allow = menuAccessible && permissionGranted;
 
-      let decision = 'ALLOW';
-      let reason = `Authorization granted: all checks passed (MOCK REAL BACKEND) - Roles [SYSTEM_ADMIN] - Multi-role OR logic active - Cached: false`;
-      let menuAccessible = true;
-      let permissionGranted = true;
-      let dataScopeValid = true;
-      let cacheTtl = 300;
-
-      if (!isAdmin && isRestricted && isSensitive) {
-        decision = 'DENY';
-        reason = `Permission "${permissionCode}" not granted for roles [RN] - MOCK DENY`;
-        permissionGranted = false;
-        cacheTtl = 1800;
-      }
-
-      if (!isAdmin && menuCode === 'SYSTEM_SETTINGS') {
-        decision = 'DENY';
-        reason = `Menu not accessible for roles [RN] (visible=false, enabled=false) - MOCK`;
-        menuAccessible = false;
-        permissionGranted = false;
-        cacheTtl = 1800;
+      if (allow) {
+        return [
+          {
+            decision: 'ALLOW',
+            reason: `MOCK ALLOW: ${permissionCode} on ${menuCode} granted to ${roleCode} (demo matrix)`,
+            menu_accessible: true,
+            permission_granted: true,
+            data_scope_valid: true,
+            cache_ttl: 300,
+            evaluated_at: new Date(),
+            user_role: roleCode,
+            user_roles: [roleCode],
+          },
+        ];
       }
 
       return [
         {
-          decision,
-          reason,
+          decision: 'DENY',
+          reason: !menuAccessible
+            ? `MOCK DENY: menu ${menuCode} is not accessible for role ${roleCode}`
+            : `MOCK DENY: permission ${permissionCode} on ${menuCode} is not granted to role ${roleCode}`,
           menu_accessible: menuAccessible,
           permission_granted: permissionGranted,
-          data_scope_valid: dataScopeValid,
-          cache_ttl: cacheTtl,
+          data_scope_valid: false,
+          cache_ttl: 1800,
           evaluated_at: new Date(),
-          user_role: isAdmin ? 'SYSTEM_ADMIN' : 'RN',
-          user_roles: isAdmin ? ['SYSTEM_ADMIN'] : ['RN'],
+          user_role: roleCode,
+          user_roles: [roleCode],
         },
       ];
     }
 
     if (query.includes('rbac.get_user_full_access')) {
-      return Array(20).fill(null).map((_, i) => ({
-        user_id: params[0],
-        username: 'admin.system',
-        primary_role_code: 'SYSTEM_ADMIN',
-        primary_role_name: 'System Administrator',
-        all_roles: ['SYSTEM_ADMIN'],
-        menu_id: (i % 10) + 1,
-        menu_code: ['DASHBOARD', 'NURSE_MASTER', 'NURSE_ROSTER', 'USER_MANAGEMENT', 'ROLES_PERMISSIONS'][i % 5],
-        menu_name: 'Mock Menu',
-        menu_route: '/dashboard',
-        permission_id: (i % 4) + 1,
-        permission_code: ['VIEW', 'CREATE', 'EDIT', 'DELETE'][i % 4],
-        permission_name: 'Mock Perm',
-        is_accessible: true,
-        is_allowed: true,
-      }));
+      const userId = params[0];
+      const roleCode = this.mockRoleCode(userId);
+      const user = this.mockData.users.find((u) => u.id === Number(userId));
+      const role = this.mockData.roles.find((r) => r.code === roleCode);
+      const granted = PrismaService.MOCK_ROLE_ACCESS[roleCode] || {};
+      const rows: any[] = [];
+      let menuId = 1;
+      for (const [menuCode, perms] of Object.entries(granted)) {
+        for (const permissionCode of perms) {
+          rows.push({
+            user_id: Number(userId),
+            username: user?.username || 'unknown',
+            primary_role_code: roleCode,
+            primary_role_name: role?.name || roleCode,
+            all_roles: [roleCode],
+            menu_id: menuId,
+            menu_code: menuCode,
+            menu_name: menuCode,
+            menu_route: '/dashboard',
+            permission_id: 1,
+            permission_code: permissionCode,
+            permission_name: permissionCode,
+            is_accessible: true,
+            is_allowed: true,
+          });
+        }
+        menuId += 1;
+      }
+      return rows;
     }
 
     if (query.includes('rbac.preview_access_change')) {
@@ -436,21 +699,32 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (query.includes('SELECT hr.code') && query.includes('user_role_assignments')) {
-      const userId = params[0];
-      if (userId === 1) return [{ code: 'SYSTEM_ADMIN' }];
-      if (userId === 2) return [{ code: 'NURSE_MANAGER' }];
-      return [{ code: 'RN' }];
+      return [{ code: this.mockRoleCode(params[0]) }];
     }
 
     if (query.includes('SELECT DISTINCT m.id as menu_id')) {
-      return [{ menu_id: 1 }, { menu_id: 2 }, { menu_id: 6 }, { menu_id: 9 }];
+      // Accessible menu ids for this role, from the same demo matrix.
+      const granted = PrismaService.MOCK_ROLE_ACCESS[this.mockRoleCode(params[0])] || {};
+      return Object.keys(granted)
+        .map((code) => this.mockMenuIds[code])
+        .filter((id) => typeof id === 'number')
+        .map((menu_id) => ({ menu_id }));
     }
 
     if (query.includes('audit.audit_logs') && query.includes('GROUP BY action')) {
-      return [
-        { action: 'LOGIN_SUCCESS', count: 45 },
-        { action: 'ACCESS_DENIED', count: 12 },
-      ];
+      // Aggregate the in-memory trail for real, so the numbers on the Audit
+      // Logs page agree with the rows listed below it. These used to be two
+      // hardcoded constants (45 / 12) that never matched anything.
+      const since = params[0] ? new Date(params[0]).getTime() : 0;
+      const counts = new Map<string, number>();
+      for (const row of this.mockAuditLogs) {
+        if (new Date(row.created_at).getTime() < since) continue;
+        counts.set(row.action, (counts.get(row.action) || 0) + 1);
+      }
+      return [...counts.entries()]
+        .map(([action, count]) => ({ action, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
     }
 
     // Default empty

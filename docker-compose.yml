@@ -95,7 +95,11 @@ services:
       - backend
     volumes:
       - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
+      # NB: Vite serves static assets from `<root>/public`, i.e. /app/public is
+      # not the frontend's public dir when the app lives in /app/frontend - the
+      # old `./frontend/public:/app/public` mount pointed at a path nothing
+      # read. index.html and assets are already inside ./frontend/src's image
+      # context via the Dockerfile COPY, so no extra mount is needed.
     command: npm run dev
 
 volumes:

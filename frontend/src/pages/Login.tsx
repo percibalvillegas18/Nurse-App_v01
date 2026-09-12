@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Form, Input, Button, Card, Typography, Alert, Divider, Space, message, Progress, Statistic } from 'antd';
-import { UserOutlined, LockOutlined, SafetyOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined, ReloadOutlined, GlobalOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, SafetyOutlined, InfoCircleOutlined, WarningOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { apiClient } from '../api/client';
 
 const { Title, Text } = Typography;
 
 const LAST_ATTEMPT_KEY = 'lastLoginAttempt';
-const ATTEMPT_INFO_KEY = 'loginAttemptInfoGlobal'; // GLOBAL counter
+// Per-account lockout state, mirrored from the login response so a refresh
+// keeps the countdown. (Was 'loginAttemptInfoGlobal' back when one shared
+// counter locked every account at once.)
+const ATTEMPT_INFO_KEY = 'loginAttemptInfo';
 const DEFAULT_CREDENTIALS = { username: 'admin.system', password: 'Password123!' };
 const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MIN = 10;
@@ -31,6 +33,9 @@ interface AttemptInfo {
   lockedUntil?: string;
   remainingSeconds?: number;
   isLocked?: boolean;
+  /** 'account' = this username is locked, 'ip' = this device is throttled. */
+  lockScope?: 'account' | 'ip';
+  /** Kept for backwards compatibility with older persisted payloads. */
   isGlobal?: boolean;
 }
 
@@ -61,59 +66,44 @@ export const Login: React.FC = () => {
 
   const isLocked = lockCountdown > 0 || attemptInfo?.isLocked;
 
-  // Restore and fetch GLOBAL counter from backend
+  // Restore the last attempt and any per-account lockout countdown.
+  // NOTE: we deliberately do NOT poll /auth/attempts here - that endpoint is
+  // now admin-only, so an unauthenticated login page would just collect 401s.
+  // The authoritative counters arrive in the 401/423 response of a login
+  // attempt; persisting them keeps the countdown across a refresh.
   useEffect(() => {
-    const init = async () => {
-      try {
-        const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.username) {
-            form.setFieldsValue(parsed);
-            setLastAttempt(parsed);
-          }
+    try {
+      const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.username) {
+          form.setFieldsValue(parsed);
+          setLastAttempt(parsed);
         }
-        // Fetch GLOBAL counter from backend (same for username+password errors)
-        try {
-          const resp = await apiClient.get('/auth/attempts');
-          const data = resp.data.data;
-          if (data.failedAttempts > 0 || data.isLocked) {
-            const info: AttemptInfo = {
-              failedAttempts: data.failedAttempts,
-              remainingAttempts: data.remainingAttempts,
-              maxAttempts: data.maxAttempts,
-              lockedUntil: data.lockedUntil,
-              remainingSeconds: data.remainingSeconds,
-              isLocked: data.isLocked,
-              isGlobal: true,
-            };
-            setAttemptInfo(info);
-            localStorage.setItem(ATTEMPT_INFO_KEY, JSON.stringify(info));
-            if (data.isLocked && data.remainingSeconds > 0) {
-              setLockCountdown(data.remainingSeconds);
-              startCountdown(data.remainingSeconds);
-            }
-          }
-        } catch {
-          // Fallback to localStorage global
-          const localSaved = localStorage.getItem(ATTEMPT_INFO_KEY);
-          if (localSaved) {
-            const parsed = JSON.parse(localSaved);
-            if (parsed.lockedUntil) {
-              const remaining = Math.max(0, Math.ceil((new Date(parsed.lockedUntil).getTime() - Date.now()) / 1000));
-              if (remaining > 0) {
-                setLockCountdown(remaining);
-                startCountdown(remaining);
-              } else {
-                localStorage.removeItem(ATTEMPT_INFO_KEY);
-                setAttemptInfo(null);
-              }
-            }
-          }
+      }
+    } catch {}
+
+    try {
+      const localSaved = localStorage.getItem(ATTEMPT_INFO_KEY);
+      if (!localSaved) return;
+      const parsed: AttemptInfo = JSON.parse(localSaved);
+      if (parsed.lockedUntil) {
+        const remaining = Math.max(
+          0,
+          Math.ceil((new Date(parsed.lockedUntil).getTime() - Date.now()) / 1000),
+        );
+        if (remaining > 0) {
+          setAttemptInfo(parsed);
+          setLockCountdown(remaining);
+          startCountdown(remaining);
+        } else {
+          localStorage.removeItem(ATTEMPT_INFO_KEY);
+          setAttemptInfo(null);
         }
-      } catch {}
-    };
-    init();
+      } else if (parsed.failedAttempts) {
+        setAttemptInfo(parsed);
+      }
+    } catch {}
   }, [form]);
 
   const startCountdown = (seconds: number) => {
@@ -126,7 +116,7 @@ export const Login: React.FC = () => {
           localStorage.removeItem(ATTEMPT_INFO_KEY);
           setAttemptInfo(null);
           setGenericError(null);
-          message.success('GLOBAL lock expired - you can try again now');
+          message.success('Lock expired - you can try again now');
           return 0;
         }
         return prev - 1;
@@ -169,7 +159,9 @@ export const Login: React.FC = () => {
 
   const onFinish = async (values: { username: string; password: string }) => {
     if (lockCountdown > 0) {
-      message.error(`GLOBAL locked - wait ${Math.ceil(lockCountdown / 60)} min (${lockCountdown}s) - username+password share same counter`);
+      message.error(
+        `Account locked - wait ${Math.ceil(lockCountdown / 60)} min (${lockCountdown}s) before trying again`,
+      );
       return;
     }
 
@@ -185,14 +177,14 @@ export const Login: React.FC = () => {
     try {
       await login(values.username, values.password);
       message.success(`Welcome ${values.username}!`);
-      // Reset GLOBAL counter on success
+      // Successful login clears this account's counter (the backend already did
+      // it). We no longer call POST /auth/reset-attempts: that is an admin-only
+      // endpoint now, and the login page has no business clearing every
+      // account's counters.
       setAttemptInfo(null);
       persistAttemptInfo(null);
       setLockCountdown(0);
       if (countdownRef.current) clearInterval(countdownRef.current);
-      try {
-        await apiClient.post('/auth/reset-attempts', {});
-      } catch {}
       navigate('/dashboard');
     } catch (err: any) {
       console.error('Login error:', err, err.response?.data);
@@ -207,16 +199,19 @@ export const Login: React.FC = () => {
       const isInvalidPassword = errorCode === 'INVALID_PASSWORD' || lowerMsg.includes('incorrect password');
       const isLockedErr = errorCode === 'ACCOUNT_LOCKED' || err.response?.status === 423 || lowerMsg.includes('locked');
 
-      // GLOBAL counter - same for username+password errors
-      let failedAttempts = details.failedAttempts ?? details.globalCount ?? 0;
+      // Per-account counter (unknown usernames are throttled per device IP).
+      let failedAttempts = details.failedAttempts ?? details.perUserAttempts ?? 0;
       if (failedAttempts === 0) {
-        // Fallback to previous global count +1
+        // Fallback: previous persisted count for this account, +1 for this try.
         failedAttempts = (attemptInfo?.failedAttempts || 0) + 1;
       }
-      const remainingAttempts = details.remainingAttempts ?? Math.max(0, MAX_ATTEMPTS - failedAttempts);
       const maxAttempts = details.maxAttempts || MAX_ATTEMPTS;
+      const remainingAttempts =
+        details.remainingAttempts ?? Math.max(0, maxAttempts - failedAttempts);
       const lockedUntil = details.lockedUntil;
       const remainingSeconds = details.remainingSeconds || details.retryAfter || 0;
+      const lockScope: 'account' | 'ip' = details.lockScope === 'ip' ? 'ip' : 'account';
+      const nowLocked = isLockedErr || remainingAttempts === 0;
 
       const newAttemptInfo: AttemptInfo = {
         failedAttempts,
@@ -224,28 +219,37 @@ export const Login: React.FC = () => {
         maxAttempts,
         lockedUntil,
         remainingSeconds,
-        isLocked: isLockedErr || failedAttempts >= MAX_ATTEMPTS,
-        isGlobal: true,
+        isLocked: nowLocked,
+        lockScope,
+        isGlobal: false,
       };
 
       setAttemptInfo(newAttemptInfo);
       persistAttemptInfo(newAttemptInfo);
 
-      if (isLockedErr || failedAttempts >= MAX_ATTEMPTS) {
+      if (nowLocked) {
         const secs = remainingSeconds || LOCK_DURATION_MIN * 60;
         setLockCountdown(secs);
         startCountdown(secs);
         const mins = Math.ceil(secs / 60);
-        const friendly = `GLOBAL LOCKED: Account locked after ${failedAttempts}/${MAX_ATTEMPTS} fails (username+password share SAME counter). Wait ${mins} min (${secs}s) until ${lockedUntil ? new Date(lockedUntil).toLocaleTimeString() : `${LOCK_DURATION_MIN} min`}. Any username+password error counts together.`;
+        const scopeText =
+          lockScope === 'ip'
+            ? 'Too many attempts from this device'
+            : `This account is locked after ${failedAttempts}/${maxAttempts} failed attempts`;
+        const friendly = `${scopeText}. Wait ${mins} min (${secs}s)${
+          lockedUntil ? ` until ${new Date(lockedUntil).toLocaleTimeString()}` : ''
+        }. Other accounts are not affected.`;
         setGenericError(friendly);
         message.error(friendly, 6);
       } else if (isUserNotFound) {
-        // Inline error under username, but counter is GLOBAL
-        const msg = `Username "${values.username}" not found. GLOBAL Attempt ${failedAttempts}/${MAX_ATTEMPTS}, ${remainingAttempts} left before ${LOCK_DURATION_MIN}-min GLOBAL lock (same counter for username+password).`;
+        // Inline error under the username field; the other field is preserved.
+        const msg = `Username "${values.username}" not found. ${remainingAttempts} attempt${
+          remainingAttempts === 1 ? '' : 's'
+        } left before a ${LOCK_DURATION_MIN}-minute lock on this device.`;
         form.setFields([{ name: 'username', errors: [msg] }]);
         message.warning(msg, 4);
       } else if (isInvalidPassword) {
-        const msg = `Incorrect password for "${values.username}". GLOBAL Attempt ${failedAttempts}/${MAX_ATTEMPTS}, ${remainingAttempts} left before GLOBAL lock (username+password share same).`;
+        const msg = `Incorrect password. Attempt ${failedAttempts}/${maxAttempts} - ${remainingAttempts} left before this account locks for ${LOCK_DURATION_MIN} min.`;
         form.setFields([{ name: 'password', errors: [msg] }]);
         message.warning(msg, 4);
       } else {
@@ -254,7 +258,7 @@ export const Login: React.FC = () => {
         } else if (lowerMsg.includes('username') || lowerMsg.includes('user')) {
           form.setFields([{ name: 'username', errors: [String(rawMessage)] }]);
         } else {
-          setGenericError(`${rawMessage} (GLOBAL attempt ${failedAttempts}/${MAX_ATTEMPTS})`);
+          setGenericError(String(rawMessage));
           message.error(String(rawMessage), 5);
         }
       }
@@ -269,7 +273,7 @@ export const Login: React.FC = () => {
 
   const fillDemoAccount = (username: string) => {
     if (isLocked) {
-      message.warning(`GLOBAL locked - wait ${Math.ceil(lockCountdown/60)} min or reset`);
+      message.warning(`Locked - wait ${Math.ceil(lockCountdown / 60)} min, or clear the countdown below`);
       return;
     }
     const newValues = { username, password: 'Password123!' };
@@ -283,10 +287,14 @@ export const Login: React.FC = () => {
     setGenericError(null);
   };
 
-  const clearAndResetDefault = async () => {
-    try {
-      await apiClient.post('/auth/reset-attempts', {});
-    } catch {}
+  /**
+   * Clear the locally remembered attempt/lockout state and restore the demo
+   * credentials. This no longer calls POST /auth/reset-attempts: that endpoint
+   * is admin-only (it clears counters for every account), so an unauthenticated
+   * login page must not invoke it - a real unlock is an admin action in
+   * Administration -> User Management.
+   */
+  const clearAndResetDefault = () => {
     localStorage.removeItem(LAST_ATTEMPT_KEY);
     localStorage.removeItem(ATTEMPT_INFO_KEY);
     form.setFieldsValue(DEFAULT_CREDENTIALS);
@@ -299,13 +307,11 @@ export const Login: React.FC = () => {
     setLockCountdown(0);
     if (countdownRef.current) clearInterval(countdownRef.current);
     setGenericError(null);
-    message.success('Reset: GLOBAL counter cleared, form reset to admin.system');
+    message.success('Form reset to admin.system');
   };
 
-  const resetGlobalAttempts = async () => {
-    try {
-      await apiClient.post('/auth/reset-attempts', {});
-    } catch {}
+  /** Dismiss the local countdown display only - the server-side lock stands. */
+  const clearLockoutDisplay = () => {
     localStorage.removeItem(ATTEMPT_INFO_KEY);
     setAttemptInfo(null);
     setLockCountdown(0);
@@ -315,7 +321,7 @@ export const Login: React.FC = () => {
       { name: 'username', errors: [] },
       { name: 'password', errors: [] },
     ]);
-    message.success('GLOBAL attempts reset');
+    message.info('Countdown hidden. The account stays locked on the server until it expires.');
   };
 
   const formatCountdown = (seconds: number) => {
@@ -324,7 +330,9 @@ export const Login: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const attemptPercent = attemptInfo ? Math.min(100, (attemptInfo.failedAttempts / MAX_ATTEMPTS) * 100) : 0;
+  const attemptPercent = attemptInfo
+    ? Math.min(100, (attemptInfo.failedAttempts / (attemptInfo.maxAttempts || MAX_ATTEMPTS)) * 100)
+    : 0;
 
   return (
     <div
@@ -350,7 +358,7 @@ export const Login: React.FC = () => {
             Nurse-App
           </Title>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            <GlobalOutlined /> GLOBAL Counter - 5 attempts / 10 min lock - Username+Password share SAME count
+            <SafetyOutlined /> {MAX_ATTEMPTS} failed attempts → {LOCK_DURATION_MIN}-minute lock, per account
           </Text>
           <div style={{ marginTop: 6, display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
             {lastAttempt && (
@@ -361,8 +369,8 @@ export const Login: React.FC = () => {
             )}
             {attemptInfo && (
               <span style={{ fontSize: 10, color: isLocked ? '#ff4d4f' : '#faad14', background: isLocked ? '#fff2f0' : '#fffbe6', padding: '2px 8px', borderRadius: 10, border: `1px solid ${isLocked ? '#ffccc7' : '#ffe58f'}` }}>
-                <GlobalOutlined style={{ marginRight: 3 }} />
-                GLOBAL: {attemptInfo.failedAttempts}/{MAX_ATTEMPTS} {isLocked ? 'LOCKED' : `(${attemptInfo.remainingAttempts} left)`}
+                <WarningOutlined style={{ marginRight: 3 }} />
+                {attemptInfo.lockScope === 'ip' ? 'This device' : 'This account'}: {attemptInfo.failedAttempts}/{attemptInfo.maxAttempts || MAX_ATTEMPTS} {isLocked ? 'LOCKED' : `(${attemptInfo.remainingAttempts} left)`}
               </span>
             )}
           </div>
@@ -373,24 +381,28 @@ export const Login: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <Text strong style={{ fontSize: 11 }}>
                 <WarningOutlined style={{ marginRight: 4, color: isLocked ? '#ff4d4f' : '#faad14' }} />
-                <GlobalOutlined /> GLOBAL Attempts: {attemptInfo.failedAttempts}/{MAX_ATTEMPTS} (username+password same)
+                Failed attempts: {attemptInfo.failedAttempts}/{attemptInfo.maxAttempts || MAX_ATTEMPTS}
               </Text>
               <Text type="secondary" style={{ fontSize: 10 }}>
-                {isLocked ? 'LOCKED ALL' : `${attemptInfo.remainingAttempts} left`}
+                {isLocked ? 'LOCKED' : `${attemptInfo.remainingAttempts} left`}
               </Text>
             </div>
             <Progress percent={attemptPercent} showInfo={false} size="small" strokeColor={isLocked ? '#ff4d4f' : attemptInfo.failedAttempts >= 3 ? '#faad14' : '#52c41a'} style={{ margin: 0 }} />
             <div style={{ fontSize: 10, color: '#666', marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
-              <span>GLOBAL Failed: {attemptInfo.failedAttempts} | Remaining: {attemptInfo.remainingAttempts}</span>
-              {isLocked ? <span style={{ color: '#ff4d4f', fontWeight: 'bold' }}><ClockCircleOutlined /> Locked {LOCK_DURATION_MIN} min ALL</span> : <span>Any error counts together</span>}
+              <span>Failed: {attemptInfo.failedAttempts} | Remaining: {attemptInfo.remainingAttempts}</span>
+              {isLocked
+                ? <span style={{ color: '#ff4d4f', fontWeight: 'bold' }}><ClockCircleOutlined /> Locked {LOCK_DURATION_MIN} min</span>
+                : <span>Only this account is affected</span>}
             </div>
             {isLocked && lockCountdown > 0 && (
               <div style={{ marginTop: 8, textAlign: 'center', background: '#fff', padding: 8, borderRadius: 6, border: '1px dashed #ff4d4f' }}>
-                <Statistic title="GLOBAL Unlock in" value={formatCountdown(lockCountdown)} prefix={<ClockCircleOutlined />} valueStyle={{ fontSize: 22, color: '#ff4d4f', fontWeight: 'bold' }} />
-                <Text type="secondary" style={{ fontSize: 10 }}>Wait {Math.ceil(lockCountdown/60)} min ({lockCountdown}s) - Any username+password error shares same counter</Text>
+                <Statistic title="Unlock in" value={formatCountdown(lockCountdown)} prefix={<ClockCircleOutlined />} valueStyle={{ fontSize: 22, color: '#ff4d4f', fontWeight: 'bold' }} />
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  Wait {Math.ceil(lockCountdown / 60)} min ({lockCountdown}s), or ask an administrator to unlock the account.
+                </Text>
                 <br />
-                <Button size="small" icon={<ReloadOutlined />} onClick={resetGlobalAttempts} style={{ marginTop: 6, fontSize: 10 }}>
-                  Reset GLOBAL counter (for testing)
+                <Button size="small" icon={<ReloadOutlined />} onClick={clearLockoutDisplay} style={{ marginTop: 6, fontSize: 10 }}>
+                  Hide countdown
                 </Button>
               </div>
             )}
@@ -399,7 +411,7 @@ export const Login: React.FC = () => {
 
         {genericError && (
           <Alert
-            message={isLocked ? `GLOBAL Locked - Wait ${LOCK_DURATION_MIN} min - Same counter` : "Authentication Issue"}
+            message={isLocked ? `Locked - wait ${LOCK_DURATION_MIN} min` : "Authentication Issue"}
             description={<div style={{ whiteSpace: 'pre-line', fontSize: 11 }}>{genericError}</div>}
             type={isLocked ? "error" : "warning"}
             showIcon
@@ -440,24 +452,26 @@ export const Login: React.FC = () => {
 
           <Form.Item style={{ marginBottom: 8 }}>
             <Button type="primary" htmlType="submit" loading={loading} block disabled={isLocked}>
-              {isLocked ? `GLOBAL Locked - Wait ${formatCountdown(lockCountdown)}` : 'Log in'}
+              {isLocked ? `Locked - wait ${formatCountdown(lockCountdown)}` : 'Log in'}
             </Button>
           </Form.Item>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 0 }}>
             <Button type="link" size="small" onClick={clearAndResetDefault} style={{ fontSize: 10, padding: 0 }}>
-              Reset all (clear GLOBAL counter)
+              Reset form
             </Button>
             <Text type="secondary" style={{ fontSize: 10 }}>
-              {attemptInfo ? `GLOBAL: ${attemptInfo.failedAttempts}/${MAX_ATTEMPTS}` : `Max ${MAX_ATTEMPTS} → ${LOCK_DURATION_MIN} min GLOBAL lock`}
+              {attemptInfo
+                ? `Attempts: ${attemptInfo.failedAttempts}/${attemptInfo.maxAttempts || MAX_ATTEMPTS}`
+                : `${MAX_ATTEMPTS} attempts → ${LOCK_DURATION_MIN} min lock (per account)`}
             </Text>
           </div>
         </Form>
 
-        <Divider style={{ margin: '10px 0' }}>Demo Accounts - GLOBAL counter same for all</Divider>
+        <Divider style={{ margin: '10px 0' }}>Demo Accounts</Divider>
 
         <Space direction="vertical" size={2} style={{ width: '100%', fontSize: 11 }}>
           <Text type="secondary" style={{ fontSize: 10 }}>
-            Password: <Text code style={{ fontSize: 10 }}>Password123!</Text> - GLOBAL: any username+password error = same count
+            Password: <Text code style={{ fontSize: 10 }}>Password123!</Text> — click an account to fill the form
           </Text>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, fontSize: 10 }}>
             {['admin.system','susan.lee','james.wilson','maria.garcia','rachel.brown','patricia.johnson','ahmed.hassan','michael.wong'].map(u => (
@@ -467,14 +481,14 @@ export const Login: React.FC = () => {
             ))}
           </div>
           <div style={{ fontSize: 9, color: '#595959', background: '#fafafa', padding: '6px', borderRadius: 4, border: '1px solid #f0f0f0' }}>
-            <strong>GLOBAL Counter:</strong> Username error + Password error share SAME count. Example: baduser (not found) + admin.system (wrong pass) = 2/5 GLOBAL. After 5 any fails, ALL locked 10 min. 
-            <br/>Per-user was more secure (prevents DoS), but you requested GLOBAL same count - implemented.
+            <strong>Per-account lockout:</strong> {MAX_ATTEMPTS} wrong passwords lock <em>that account only</em> for {LOCK_DURATION_MIN} minutes; everyone else can still sign in.
+            <br/>Unknown usernames are throttled per device instead, so a typo can never lock the whole hospital out.
           </div>
         </Space>
 
         <div style={{ marginTop: 8, textAlign: 'center' }}>
           <Text type="secondary" style={{ fontSize: 9 }}>
-            GLOBAL {MAX_ATTEMPTS} attempts / {LOCK_DURATION_MIN} min lock - Same counter for username+password
+            {MAX_ATTEMPTS} attempts / {LOCK_DURATION_MIN} min lock — per account, not global
           </Text>
         </div>
       </Card>

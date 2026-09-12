@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Req,
+  ForbiddenException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { RbacService } from './rbac.service';
@@ -158,16 +159,50 @@ export class RbacController {
   }
 
   // Effective Access
+
+  /**
+   * The effective-access endpoints resolve *any* user's full permission matrix,
+   * so they are gated behind USER_MANAGEMENT/VIEW - except that a user may
+   * always inspect their own effective access (login is built from the same
+   * resolution and every page needs it).
+   *
+   * `POST .../evaluate` previously had no decorator at all, so any
+   * authenticated user could ask the server whether *any other* user held a
+   * permission - an authorization oracle.
+   *
+   * The check goes through EffectiveAccessService (the same cached path the
+   * RBAC guard uses) rather than a permissions map on the JWT, because the
+   * token only carries { sub, username, role, primaryRoleId, sessionId }.
+   */
+  private async canInspectUser(req: any, targetUserId: number): Promise<void> {
+    if (req?.user?.id === targetUserId) return;
+
+    const decision = await this.effectiveAccessService.evaluateAccess(
+      req?.user?.id,
+      'USER_MANAGEMENT',
+      'VIEW',
+    );
+
+    if (decision.decision !== 'ALLOW') {
+      throw new ForbiddenException(
+        'USER_MANAGEMENT/VIEW permission required to inspect another user',
+      );
+    }
+  }
+
   @Get('effective-access/:userId')
-  @RequirePermission({ menuCode: 'USER_MANAGEMENT', permissionCode: 'VIEW' })
-  async getEffectiveAccess(@Param('userId') userId: string) {
-    const matrix = await this.effectiveAccessService.getUserFullAccess(parseInt(userId, 10));
-    const accessibleMenus = await this.effectiveAccessService.getAccessibleMenus(parseInt(userId, 10));
+  @UseGuards(AuthGuard('jwt'))
+  async getEffectiveAccess(@Param('userId') userId: string, @Req() req: any) {
+    const targetUserId = parseInt(userId, 10);
+    await this.canInspectUser(req, targetUserId);
+
+    const matrix = await this.effectiveAccessService.getUserFullAccess(targetUserId);
+    const accessibleMenus = await this.effectiveAccessService.getAccessibleMenus(targetUserId);
 
     return {
       success: true,
       data: {
-        userId: parseInt(userId, 10),
+        userId: targetUserId,
         calculatedAt: new Date().toISOString(),
         menus: accessibleMenus,
         fullMatrix: matrix,
@@ -181,12 +216,17 @@ export class RbacController {
   }
 
   @Post('effective-access/:userId/evaluate')
+  @UseGuards(AuthGuard('jwt'))
   async evaluateAccess(
     @Param('userId') userId: string,
     @Body() body: { menuCode: string; permissionCode: string; resourceId?: number },
+    @Req() req: any,
   ) {
+    const targetUserId = parseInt(userId, 10);
+    await this.canInspectUser(req, targetUserId);
+
     const result = await this.effectiveAccessService.evaluateSpecificRequest(
-      parseInt(userId, 10),
+      targetUserId,
       body.menuCode,
       body.permissionCode,
       body.resourceId,

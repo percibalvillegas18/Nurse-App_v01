@@ -23,10 +23,15 @@ export class AuditInterceptor implements NestInterceptor {
     const request = context.switchToHttp().getRequest();
     const { method, url, body, params, query, user, ip, headers } = request;
 
-    // Only audit mutating methods and RBAC config changes
+    // Only audit mutating methods.
     const shouldAudit = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
-    if (!shouldAudit || !user) {
+    // /auth/* is audited explicitly by AuthService (login success/failure,
+    // lockouts, RBAC denials); auditing it here too would double-log every
+    // attempt, including ones that must never carry a request body.
+    const isAuthRoute = /(^|\/)auth(\/|$)/.test(url.split('?')[0]);
+
+    if (!shouldAudit || !user || isAuthRoute) {
       return next.handle();
     }
 
