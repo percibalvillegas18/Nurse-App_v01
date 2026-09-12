@@ -452,11 +452,11 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * a query error against a real database is rethrown, never silently
    * downgraded to a fake ALLOW.
    */
-  async $queryRawUnsafe(query: string, ...params: any[]): Promise<any[]> {
+  async $queryRawUnsafe<T = any[]>(query: string, ...params: any[]): Promise<T> {
     const client = this.getClient();
     if (client && !this.isMock) {
       try {
-        return await client.$queryRawUnsafe(query, ...params);
+        return (await client.$queryRawUnsafe(query, ...params)) as T;
       } catch (error: any) {
         if (!this.mockAllowed) {
           this.logger.error(`Raw query failed: ${error.message} - Query: ${query.substring(0, 100)}`);
@@ -473,7 +473,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Mock implementation for evaluate_access and other functions
-    return this.mockQueryRaw(query, params);
+    return this.mockQueryRaw(query, params) as T;
   }
 
   /** Role code for a mock user, mirroring mockData.users[].primary_role_id. */
