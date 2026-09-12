@@ -13,6 +13,29 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # Real PostgreSQL so the migration chain and the rbac integration tests
+    # (effective-access.integration.spec.ts) actually run, instead of being
+    # skipped for lack of a database.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      PG_INTEGRATION: 'true'
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,8 +50,9 @@ jobs:
 
       - name: Generate Prisma client (validates schema)
         run: npx prisma generate
-        env:
-          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+
+      - name: Apply SQL migrations + seed
+        run: npx ts-node scripts/run-migrations.ts
 
       - name: Lint
         run: npm run lint
@@ -36,7 +60,7 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Unit tests
+      - name: Unit + integration tests
         run: npm test
 
       - name: Build (verifies dist/main.js layout)
