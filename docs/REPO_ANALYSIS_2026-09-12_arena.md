@@ -22,9 +22,11 @@
 >   `Shift` scope types now enforced for roster (reads + writes); rule-based
 >   `Assigned` documented as the remaining TODO (fails closed).
 > - **Employee data model review** — `primary_role_id`/`user_id` now validated
->   (400 instead of FK 500), employee date sanity checks added, and the missing
+>   (400 instead of FK 500), employee date sanity checks added, the missing
 >   "employment group" (type / hire date / home unit) added to the Nurse Master
->   UI. Full findings in `docs/EMPLOYEE_DATA_REVIEW.md`.
+>   UI, and `listNurses` slimmed to a minimum-necessary summary projection
+>   (personal identifiers now served only by the scope-gated detail endpoint).
+>   Full findings in `docs/EMPLOYEE_DATA_REVIEW.md`.
 >
 > Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,

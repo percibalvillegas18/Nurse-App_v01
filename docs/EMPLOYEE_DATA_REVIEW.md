@@ -74,6 +74,17 @@ Type, Hire Date, Home Unit) wired into the payload and edit prefill, and the
 detail drawer shows Employment Type and Hire Date. Employment Type defaults to
 `FullTime`.
 
+### 3.4 Minimum-necessary on the list endpoint (was: over-broad PHI exposure)
+`listNurses` returned personal identifiers (`gender`, `dateOfBirth`,
+`nationality`, `phone`, `email`, `hireDate`, `userId`) for every row even
+though the master table only renders name/role/unit/status.
+
+**Fix:** the list endpoint now returns a summary projection (identity, role,
+unit, employment type, status, credential summary) and no longer selects the
+linked account's email. Personal identifiers are only served by the
+scope-gated `getNurse()` detail endpoint. The Nurse Master UI now fetches the
+full record on edit before pre-filling the form.
+
 ## 4. Noted, not changed (conscious scope decisions)
 
 - **`gender` is binary** (`Male` / `Female`) in the DB enum, DTO, and UI.
@@ -83,8 +94,3 @@ detail drawer shows Employment Type and Hire Date. Employment Type defaults to
   **`nationality` is not server-enforced** against the country list (the
   backend accepts any string ≤ 100 chars; the UI restricts selection). Kept
   flexible on purpose; tighten if a strict format is required.
-- **Minimum-necessary on the list endpoint.** `listNurses` returns personal
-  fields (`gender`, `dateOfBirth`, `nationality`, `phone`) for every row even
-  though the table only renders name/role/unit/status. The detail view already
-  enforces per-nurse scope; a future pass could slim the list payload to the
-  table's needs (reducing PHI exposure on list reads).
