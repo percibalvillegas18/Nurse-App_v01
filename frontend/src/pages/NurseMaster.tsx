@@ -451,7 +451,17 @@ export const NurseMaster: React.FC = () => {
 
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="contactNo" label="Contact No. (Mobile)" rules={[{ required: true, message: 'Required' }]}>
+              <Form.Item
+                name="contactNo"
+                label="Contact No. (Mobile)"
+                rules={[
+                  { required: true, message: 'Required' },
+                  {
+                    pattern: /^(\+?[0-9][0-9 \-().]{6,19})?$/,
+                    message: 'Enter a valid phone number (e.g. +966 50 123 4567)',
+                  },
+                ]}
+              >
                 <Input placeholder="+966-5X-XXX-XXXX" />
               </Form.Item>
             </Col>
