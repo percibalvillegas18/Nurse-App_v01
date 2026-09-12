@@ -99,16 +99,20 @@ enforces them at the controller boundary):
 
 13 DTO unit tests cover both fields on create and update.
 
+### 3.6 Demo-data nationality normalization (was: demonyms vs. country names)
+The V3_2 backfill seeded the demo nurses with demonyms (`Filipino`,
+`American`, `South Korean`) that are not in the validated `COUNTRIES` list
+(country display names). `Saudi` is already a supported display name and was
+left as-is.
+
+**Fix:** `V3_8__normalize_nurse_nationality.sql` (idempotent) rewrites the
+legacy values to `Philippines` / `United States` / `South Korea`, so seeded
+records pass the new validation and can be re-submitted. The demo
+`mock-server.js` rows were updated to match. V3_2 is left untouched (applied
+migrations are checksum-immutable).
+
 ## 4. Noted, not changed (conscious scope decisions)
 
 - **`gender` is binary** (`Male` / `Female`) in the DB enum, DTO, and UI.
   Extending it requires a migration + seeds + frontend; flagged as a product
   decision.
-- **Demo-data nationality mismatch (pre-existing).** The V3_1/V3_2 demo rows
-  were seeded with demonyms (`Filipino`, `American`, `South Korean`) that are
-  **not** in the validated `COUNTRIES` list (which uses country display names
-  such as `Philippines`, `United States`, `South Korea`; `Saudi` is the lone
-  demonym that matches). Those values remain stored but can no longer be
-  re-submitted — editing such a record in the UI requires re-selecting a
-  listed country. Normalizing the demo rows (or the list) is a small
-  follow-up.

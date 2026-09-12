@@ -30,6 +30,9 @@
 > - **Employee data validation** — `nationality` is now server-enforced against
 >   the supported country list and `phone` against a loose international format
 >   (shared `countries.ts`, DTO decorators + 13 unit tests).
+> - **Demo nationality normalization** — `V3_8` rewrites legacy demonym values
+>   (`Filipino`/`American`/`South Korean`) to country display names so seeded
+>   records pass the new validation; mock-server demo rows updated.
 >
 > Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
