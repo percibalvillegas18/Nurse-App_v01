@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { AuditService } from './audit.service';
 import { AuditController } from './audit.controller';
+import { AuditMaintenanceService } from './audit-maintenance.service';
 import { RbacModule } from '../rbac/rbac.module';
 
 /**
@@ -16,7 +17,7 @@ import { RbacModule } from '../rbac/rbac.module';
 @Module({
   imports: [RbacModule],
   controllers: [AuditController],
-  providers: [AuditService],
-  exports: [AuditService],
+  providers: [AuditService, AuditMaintenanceService],
+  exports: [AuditService, AuditMaintenanceService],
 })
 export class AuditModule {}
