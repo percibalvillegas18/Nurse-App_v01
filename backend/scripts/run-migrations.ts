@@ -26,6 +26,7 @@ const order = [
   'V3_5__tamper_proof_audit_logs.sql',
   'V3_6__audit_log_partitioning.sql',
   'V4_0__contract_master.sql',
+  'V4_1__contract_expiry_alerts.sql',
 ];
 
 interface Flags {
@@ -66,17 +67,17 @@ async function run() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     if (flags.dryRun) {
-      console.log('ℹ️  DATABASE_URL not set - dry-run order:');
+      console.log('DATABASE_URL not set - dry-run order:');
       order.forEach((f, i) => console.log(`  ${String(i + 1).padStart(2, ' ')}. ${f}`));
       return;
     }
-    console.error('❌ DATABASE_URL not set');
+    console.error('DATABASE_URL not set');
     process.exit(1);
   }
 
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
-  console.log('✅ Connected to database');
+  console.log('Connected to database');
   await ensureHistoryTable(client);
 
   const { rows } = await client.query(
@@ -88,7 +89,7 @@ async function run() {
 
   const missing = order.filter((f) => !fs.existsSync(path.join(migrationsDir, f)));
   if (missing.length > 0) {
-    console.error(`❌ Missing migration file(s): ${missing.join(', ')}`);
+    console.error(`Missing migration file(s): ${missing.join(', ')}`);
     await client.end();
     process.exit(1);
   }
@@ -105,7 +106,7 @@ async function run() {
 
     if (previous && !flags.force) {
       if (previous.status !== 'Success') {
-        console.error(`❌ ${file} recorded as '${previous.status}'. Fix or use --force.`);
+        console.error(`${file} recorded as '${previous.status}'. Fix or use --force.`);
         failures.push(file);
         if (!flags.continueOnError) break;
         continue;
@@ -115,7 +116,7 @@ async function run() {
     }
 
     if (flags.dryRun) {
-      console.log(`\n▶️  [dry-run] would apply ${file}`);
+      console.log(`\n[dry-run] would apply ${file}`);
       appliedCount++;
       continue;
     }
@@ -127,12 +128,12 @@ async function run() {
          ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, status = 'Success'`,
         [file, checksum, 'baseline'],
       );
-      console.log(`📌 ${file} baselined`);
+      console.log(`${file} baselined`);
       appliedCount++;
       continue;
     }
 
-    console.log(`\n▶️  Running ${file}...`);
+    console.log(`\nRunning ${file}...`);
     const startedAt = Date.now();
     try {
       await client.query('BEGIN');
@@ -147,10 +148,10 @@ async function run() {
         [file, checksum, duration, process.env.USER || 'unknown'],
       );
       await client.query('COMMIT');
-      console.log(`✅ ${file} completed in ${duration}ms`);
+      console.log(`${file} completed in ${duration}ms`);
       appliedCount++;
     } catch (error: any) {
-      console.error(`❌ ${file} failed: ${error.message}`);
+      console.error(`${file} failed: ${error.message}`);
       try {
         await client.query('ROLLBACK');
       } catch {
@@ -163,13 +164,13 @@ async function run() {
 
   await client.end();
   if (failures.length > 0) {
-    console.error(`\n💥 Failed: ${failures.join(', ')}`);
+    console.error(`\nFailed: ${failures.join(', ')}`);
     process.exit(1);
   }
-  console.log(`\n🎉 Done - ${appliedCount} applied, ${skippedCount} skipped.`);
+  console.log(`\nDone - ${appliedCount} applied, ${skippedCount} skipped.`);
 }
 
 run().catch((e) => {
-  console.error('💥 Migration runner crashed:', e);
+  console.error('Migration runner crashed:', e);
   process.exit(1);
 });
