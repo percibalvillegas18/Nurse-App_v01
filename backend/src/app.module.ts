@@ -8,6 +8,7 @@ import { RbacModule } from './modules/rbac/rbac.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { NursingModule } from './modules/nursing/nursing.module';
 import { UsersModule } from './modules/users/users.module';
+import { ContractsModule } from './modules/contracts/contracts.module';
 import { RedisModule } from './modules/redis/redis.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { HealthController } from './health.controller';
@@ -19,7 +20,6 @@ import { CacheController } from './cache.controller';
       isGlobal: true,
       envFilePath: ['.env.local', '.env.development', '.env'],
     }),
-    // Global: one PrismaService instance shared by every module.
     PrismaModule,
     RedisModule,
     AuthModule,
@@ -27,11 +27,10 @@ import { CacheController } from './cache.controller';
     AuditModule,
     NursingModule,
     UsersModule,
+    ContractsModule,
   ],
   controllers: [HealthController, CacheController],
   providers: [
-    // Both were implemented but never registered, so mutating requests were not
-    // audited and exceptions fell through to Nest's default error shape.
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
