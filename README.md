@@ -6,52 +6,54 @@ Complete RBAC-based Nurse Workforce Management System with NestJS + Prisma backe
 ## Repository Structure
 ```
 Nurse-App_v01/
-├── ANALYSIS.md                                   # Deep repo analysis (generated)
-├── Hospital-RBAC-Complete-Documentation-v1.0.md  # V1 spec (legacy)
-├── Effective Access Function + Role Model...txt  # V2 Phase 0 spec (authoritative)
-├── docker-compose.yml                            # Postgres + Redis + pgAdmin + Backend
-├── backend/                                      # NestJS backend
-│   ├── mock-server.js                            # Express mock API - DEMO/PREVIEW ONLY, never deploy
-│   ├── src/
-│   │   ├── main.ts
-│   │   ├── app.module.ts
-│   │   ├── health.controller.ts                  # Real DB/Redis readiness checks
-│   │   ├── common/
-│   │   │   ├── guards/rbac.guard.ts              # Core authorization guard
-│   │   │   ├── decorators/require-permission.decorator.ts
-│   │   │   ├── interceptors/audit.interceptor.ts
-│   │   │   └── filters/http-exception.filter.ts
-│   │   └── modules/
-│   │       ├── auth/                             # JWT, login, sessions
-│   │       ├── rbac/                             # Effective access, menus, permissions
-│   │       └── audit/                            # Audit logging
-│   ├── prisma/
-│   │   ├── schema.prisma                         # Multi-schema Prisma model
-│   │   └── seed.ts                               # Real hospital seed with bcrypt
-│   ├── database/migrations/
-│   │   ├── V1_0__initial_schema.sql
-│   │   ├── V1_1__system_tables.sql
-│   │   ├── V2_0__effective_access_function.sql   # Initial version
-│   │   ├── V2_1__role_model_redesign.sql         # Hospital roles + assignments
-│   │   ├── V2_2__rbac_tables_role_updates.sql
-│   │   ├── V2_3__seed_hospital_roles_and_users.sql
-│   │   ├── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
-│   │   ├── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
-│   │   ├── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
-│   │   ├── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
-│   │   ├── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
-│   │   ├── V3_3__drop_nurse_email.sql            # Email comes from the linked user account
-│   │   └── V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
-│   ├── scripts/run-migrations.ts
-│   ├── Dockerfile
-│   ├── package.json
-│   └── README.md
-└── frontend/                                     # React 18 + Vite + Ant Design
-    └── src/
-        ├── api/client.ts                         # Axios w/ JWT + refresh interceptor
-        ├── hooks/useEffectiveAccess.ts           # usePermission(menu, perm)
-        ├── context/AuthContext.tsx
-        └── pages/                                # Login, Dashboard, NurseMaster,
+── ANALYSIS.md                                   # Deep repo analysis (generated)
+── Hospital-RBAC-Complete-Documentation-v1.0.md  # V1 spec (legacy)
+── Effective Access Function + Role Model...txt  # V2 Phase 0 spec (authoritative)
+── docker-compose.yml                            # Postgres + Redis + pgAdmin + Backend
+── docs/
+│   ── HIPAA_COMPLIANCE_CHECKLIST.md             # HIPAA technical + administrative checklist
+── backend/                                      # NestJS backend
+│   ── mock-server.js                            # Express mock API - DEMO/PREVIEW ONLY, never deploy
+│   ── src/
+│   │   ── main.ts
+│   │   ── app.module.ts
+│   │   ── health.controller.ts                  # Real DB/Redis readiness checks
+│   │   ── common/
+│   │   │   ── guards/rbac.guard.ts              # Core authorization guard
+│   │   │   ── decorators/require-permission.decorator.ts
+│   │   │   ── interceptors/audit.interceptor.ts
+│   │   │   └─ filters/http-exception.filter.ts
+│   │   └─ modules/
+│   │       ── auth/                             # JWT, login, sessions
+│   │       ── rbac/                             # Effective access, menus, permissions
+│   │       └─ audit/                            # Audit logging
+│   ── prisma/
+│   │   ── schema.prisma                         # Multi-schema Prisma model
+│   │   └─ seed.ts                               # Real hospital seed with bcrypt
+│   ── database/migrations/
+│   │   ── V1_0__initial_schema.sql
+│   │   ── V1_1__system_tables.sql
+│   │   ── V2_0__effective_access_function.sql   # Initial version
+│   │   ── V2_1__role_model_redesign.sql         # Hospital roles + assignments
+│   │   ── V2_2__rbac_tables_role_updates.sql
+│   │   ── V2_3__seed_hospital_roles_and_users.sql
+│   │   ── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
+│   │   ── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
+│   │   ── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
+│   │   ── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
+│   │   ── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
+│   │   ── V3_3__drop_nurse_email.sql            # Email comes from the linked user account
+│   │   └─ V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
+│   ── scripts/run-migrations.ts
+│   ── Dockerfile
+│   ── package.json
+│   └─ README.md
+└─ frontend/                                     # React 18 + Vite + Ant Design
+    └─ src/
+        ── api/client.ts                         # Axios w/ JWT + refresh interceptor
+        ── hooks/useEffectiveAccess.ts           # usePermission(menu, perm)
+        ── context/AuthContext.tsx
+        └─ pages/                                # Login, Dashboard, NurseMaster,
                                                   # Roster, RBAC admin (Roles,
                                                   # EffectiveAccess, AuditLogs, CacheStats)
 ```
@@ -145,6 +147,7 @@ WHERE role_code = ANY(v_all_role_codes)
 ## Next Steps
 - Leave management + workforce analytics domains
 - MFA, RLS hardening, audit partitioning
+- HIPAA gap closure (see `docs/HIPAA_COMPLIANCE_CHECKLIST.md`)
 - Load testing
 
 ## Done Recently
@@ -176,8 +179,10 @@ WHERE role_code = ANY(v_all_role_codes)
 - ✅ Real `/health/ready` checks: DB `SELECT 1` via Prisma, Redis `PING`, 503 when DB down
 - ✅ CI workflow (`.github/workflows/ci.yml`): backend (npm ci, prisma generate, tsc, jest) + frontend (npm ci, tsc, build)
 - ✅ Lockfiles committed for reproducible `npm ci`
+- ✅ HIPAA compliance checklist mapped to current implementation (`docs/HIPAA_COMPLIANCE_CHECKLIST.md`)
 
 ## Docs
+- See `docs/HIPAA_COMPLIANCE_CHECKLIST.md` for the full HIPAA technical, administrative, and organizational checklist with current status mapping
 - See `ANALYSIS.md` for deep analysis
 - See `backend/README.md` for backend details
 - Original specs: `Hospital-RBAC-Complete-Documentation-v1.0.md` and `Effective Access Function...txt`
