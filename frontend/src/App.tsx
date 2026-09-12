@@ -5,6 +5,7 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute, PublicRoute } from './components/ProtectedRoute';
+import { SessionIdleGuard } from './components/SessionIdleGuard';
 import { AppLayout } from './components/Layout/AppLayout';
 
 // Route-level code-splitting: each page is fetched on demand so the heavy
@@ -62,8 +63,9 @@ const App: React.FC = () => {
       >
         <AntApp>
           <AuthProvider>
-            <BrowserRouter>
-              <Suspense fallback={<PageFallback />}>
+            <SessionIdleGuard>
+              <BrowserRouter>
+                <Suspense fallback={<PageFallback />}>
                 <Routes>
                   {/* Public */}
                   <Route
@@ -208,7 +210,8 @@ const App: React.FC = () => {
                   <Route path="*" element={<Navigate to="/404" replace />} />
                 </Routes>
               </Suspense>
-            </BrowserRouter>
+              </BrowserRouter>
+            </SessionIdleGuard>
           </AuthProvider>
         </AntApp>
       </ConfigProvider>
