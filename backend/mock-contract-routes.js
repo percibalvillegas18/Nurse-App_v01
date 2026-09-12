@@ -79,10 +79,42 @@ module.exports = function registerContractRoutes(app, deps) {
     });
   }
 
+  function datesOverlap(aStart, aEnd, bStart, bEnd) {
+    const aE = aEnd || '9999-12-31';
+    const bE = bEnd || '9999-12-31';
+    return aStart <= bE && bStart <= aE;
+  }
+
+  function hasValidContract(nurseId, onDate) {
+    const d = String(onDate).slice(0, 10);
+    return mockContracts.some(
+      (c) =>
+        c.nurseId === nurseId &&
+        c.status === 'Active' &&
+        c.startDate <= d &&
+        (c.endDate == null || c.endDate >= d),
+    );
+  }
+  app.locals.hasValidContract = hasValidContract;
+
   function contractAction(id, toStatus, reason) {
     const c = mockContracts.find((x) => x.id === id);
     if (!c) return { error: 404, message: 'Contract not found' };
     const from = c.status;
+
+    if (toStatus === 'Active') {
+      for (const other of mockContracts) {
+        if (other.id === c.id) continue;
+        if (other.nurseId !== c.nurseId) continue;
+        if (other.status !== 'Active') continue;
+        if (!datesOverlap(c.startDate, c.endDate, other.startDate, other.endDate)) continue;
+        const ofrom = other.status;
+        other.status = 'Superseded';
+        other.updatedAt = new Date().toISOString();
+        pushHist(other.id, ofrom, 'Superseded', 'Superseded by activation of ' + c.contractNumber);
+      }
+    }
+
     c.status = toStatus;
     c.updatedAt = new Date().toISOString();
     if (toStatus === 'Active') c.activatedAt = new Date().toISOString();
@@ -265,6 +297,9 @@ module.exports = function registerContractRoutes(app, deps) {
   app.post('/api/v1/contracts/:id/renew', (req, res) => {
     const prior = mockContracts.find((x) => x.id === parseInt(req.params.id, 10));
     if (!prior) return res.status(404).json({ success: false, message: 'Not found', timestamp: new Date().toISOString() });
+    if (!['Active', 'Expired', 'Suspended'].includes(prior.status)) {
+      return res.status(400).json({ success: false, message: 'Only Active, Expired, or Suspended can be renewed', timestamp: new Date().toISOString() });
+    }
     const b = req.body || {};
     if (!b.startDate) {
       return res.status(400).json({ success: false, message: 'startDate required', timestamp: new Date().toISOString() });
@@ -289,11 +324,7 @@ module.exports = function registerContractRoutes(app, deps) {
       updatedAt: new Date().toISOString(),
     };
     mockContracts.push(neu);
-    pushHist(neu.id, null, 'Draft', 'Created as renewal');
-    const from = prior.status;
-    prior.status = 'Superseded';
-    prior.updatedAt = new Date().toISOString();
-    pushHist(prior.id, from, 'Superseded', `Superseded by ${neu.contractNumber}`);
+    pushHist(neu.id, null, 'Draft', 'Created as renewal; prior remains ' + prior.status + ' until activate');
     res.status(201).json({
       success: true,
       statusCode: 201,
@@ -310,5 +341,5 @@ module.exports = function registerContractRoutes(app, deps) {
     });
   });
 
-  return { mockContracts, mockAgencies };
+  return { mockContracts, mockAgencies, hasValidContract };
 };
