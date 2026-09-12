@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../auth/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -61,16 +62,202 @@ export class NursingService {
   ) {}
 
   // ==========================================================================
+  // Data-scope resolution (least privilege on ePHI reads/writes)
+  // ==========================================================================
+
+  /**
+   * Hierarchy is Hospital > Department > NursingUnit. An entry grants access
+   * to that node and everything below it. A user with no active scopes is
+   * denied PHI access outright; an `All`/`Hospital` scope grants everything.
+   */
+  private async resolveUserScope(userId: number): Promise<{
+    organizationIds: number[];
+    departmentIds: number[];
+    unitIds: number[];
+  } | null> {
+    const rows = (await this.prisma.rbac_user_data_scopes.findMany({
+      where: {
+        user_id: userId,
+        status: 'Active',
+        OR: [{ effective_from: null }, { effective_from: { lte: new Date() } }],
+      },
+    })) as Array<{
+      scope_type: string;
+      organization_id?: number | null;
+      department_id?: number | null;
+      nursing_unit_id?: number | null;
+    }>;
+
+    const orgs = new Set<number>();
+    const depts = new Set<number>();
+    const units = new Set<number>();
+
+    for (const scope of rows) {
+      if (scope.scope_type === 'All') {
+        return { organizationIds: [], departmentIds: [], unitIds: [] };
+      }
+      if (scope.scope_type === 'Hospital') {
+        if (scope.organization_id != null) orgs.add(scope.organization_id);
+      } else if (scope.scope_type === 'Department') {
+        if (scope.department_id != null) depts.add(scope.department_id);
+      } else if (scope.scope_type === 'NursingUnit') {
+        if (scope.nursing_unit_id != null) units.add(scope.nursing_unit_id);
+      }
+      // 'Post' / 'Shift' / 'Assigned' are not yet enforced at this level.
+    }
+
+    if (orgs.size === 0 && depts.size === 0 && units.size === 0) {
+      return null; // no usable scope => deny (fail closed)
+    }
+
+    return {
+      organizationIds: [...orgs],
+      departmentIds: [...depts],
+      unitIds: [...units],
+    };
+  }
+
+  /**
+   * True when every resource org is within the user's Hospital scopes.
+   * Called only for non-'All' scopes, so an empty org list means "no grant".
+   */
+  private organizationsAllow(
+    scope: { organizationIds: number[] },
+    orgIds: Array<number | null | undefined>,
+  ): boolean {
+    if (scope.organizationIds.length === 0) return false; // no org-level grants
+    return orgIds.every((id) => id != null && scope.organizationIds.includes(id));
+  }
+
+  /** True when a single node is within the granted depts/units. */
+  private unitAllow(scope: { departmentIds: number[]; unitIds: number[] }, deptId: any, unitId: any): boolean {
+    if (scope.departmentIds.includes(deptId)) return true;
+    if (scope.unitIds.includes(unitId)) return true;
+    return false;
+  }
+
+  /**
+   * Return the concrete org/dept/unit nodes the user may see, or throw 403.
+   */
+  private async assertNursingScope(userId: number): Promise<{
+    organizationIds: number[];
+    departmentIds: number[];
+    unitIds: number[];
+  }> {
+    const scope = await this.resolveUserScope(userId);
+    if (!scope) {
+      throw new ForbiddenException(
+        'You do not have a data scope that permits access to workforce records',
+      );
+    }
+    return scope;
+  }
+
+  /**
+   * Unit ids the user may see. Returns null for an 'All' scope (no filter),
+   * and an empty array when the scope matches no units (nothing visible).
+   */
+  private async resolveVisibleUnits(userId: number): Promise<number[] | null> {
+    const scope = await this.assertNursingScope(userId);
+    if (
+      scope.organizationIds.length === 0 &&
+      scope.departmentIds.length === 0 &&
+      scope.unitIds.length === 0
+    ) {
+      return null; // 'All' scope => no filter
+    }
+
+    const unitIds = new Set<number>(scope.unitIds);
+    if (scope.departmentIds.length > 0) {
+      const rows = (await this.prisma.rbac_nursing_units.findMany({
+        where: { department_id: { in: scope.departmentIds }, status: 'Active' },
+        select: { id: true },
+      })) as Array<{ id: number }>;
+      rows.forEach((r) => unitIds.add(Number(r.id)));
+    }
+    if (scope.organizationIds.length > 0) {
+      const rows = (await this.prisma.rbac_nursing_units.findMany({
+        where: {
+          status: 'Active',
+          department: { organization_id: { in: scope.organizationIds } },
+        },
+        select: { id: true },
+      })) as Array<{ id: number }>;
+      rows.forEach((r) => unitIds.add(Number(r.id)));
+    }
+    return [...unitIds];
+  }
+
+  private async loadNurseOrgContext(id: number): Promise<{
+    home_unit_id: number | null;
+    department_id: number | null;
+    organization_id: number | null;
+  }> {
+    const row = await this.prisma.nursing_nurses.findUnique({
+      where: { id },
+      include: {
+        home_unit: {
+          select: {
+            id: true,
+            department_id: true,
+            department: { select: { organization_id: true } },
+          },
+        },
+      },
+    });
+    if (!row || row.deleted_at) throw new NotFoundException(`Nurse #${id} not found`);
+    const unit = (row as any).home_unit;
+    return {
+      home_unit_id: unit ? Number(unit.id) : null,
+      department_id: unit ? Number(unit.department_id) : null,
+      organization_id: unit?.department ? Number(unit.department.organization_id) : null,
+    };
+  }
+
+  private async assertCanAccessNurse(userId: number, nurseId: number): Promise<void> {
+    const scope = await this.resolveUserScope(userId);
+    if (!scope) {
+      throw new ForbiddenException(
+        'You do not have a data scope that permits access to this nurse',
+      );
+    }
+
+    // Always resolve the nurse (throws 404 when it does not exist) so callers
+    // keep their not-found semantics regardless of scope.
+    const ctx = await this.loadNurseOrgContext(nurseId);
+
+    if (
+      scope.organizationIds.length === 0 &&
+      scope.departmentIds.length === 0 &&
+      scope.unitIds.length === 0
+    ) {
+      return; // 'All' scope
+    }
+
+    if (ctx.organization_id != null && this.organizationsAllow(scope, [ctx.organization_id])) {
+      return;
+    }
+    if (this.unitAllow(scope, ctx.department_id, ctx.home_unit_id)) {
+      return;
+    }
+
+    throw new ForbiddenException('This nurse is outside your data scope');
+  }
+
+  // ==========================================================================
   // Nurses
   // ==========================================================================
 
-  async listNurses(params: {
-    search?: string;
-    status?: string;
-    unitId?: number;
-    page?: number;
-    limit?: number;
-  }) {
+  async listNurses(
+    params: {
+      search?: string;
+      status?: string;
+      unitId?: number;
+      page?: number;
+      limit?: number;
+    },
+    userId: number,
+  ) {
     const page = Math.max(1, params.page || 1);
     const limit = Math.min(100, Math.max(1, params.limit || 20));
     const where: any = { deleted_at: null };
@@ -86,6 +273,12 @@ export class NursingService {
         { employee_number: { contains: q, mode: 'insensitive' } },
         { job_no: { contains: q, mode: 'insensitive' } },
       ];
+    }
+
+    // Data-scope filter: restrict to units the user may see (unless 'All').
+    const visibleUnits = await this.resolveVisibleUnits(userId);
+    if (visibleUnits !== null) {
+      where.home_unit_id = { in: visibleUnits.length ? visibleUnits : [-1] };
     }
 
     const [rows, total] = await Promise.all([
@@ -123,7 +316,9 @@ export class NursingService {
     };
   }
 
-  async getNurse(id: number) {
+  async getNurse(id: number, userId: number) {
+    await this.assertCanAccessNurse(userId, id);
+
     const row = await this.prisma.nursing_nurses.findUnique({
       where: { id },
       include: {
@@ -298,8 +493,8 @@ export class NursingService {
   // Credentials
   // ==========================================================================
 
-  async listNurseCredentials(nurseId: number) {
-    await this.ensureNurseExists(nurseId);
+  async listNurseCredentials(nurseId: number, userId: number) {
+    await this.assertCanAccessNurse(userId, nurseId);
     const rows = await this.prisma.nursing_credentials.findMany({
       where: { nurse_id: nurseId, deleted_at: null },
       orderBy: { expiry_date: 'asc' },
@@ -307,16 +502,23 @@ export class NursingService {
     return { items: (rows || []).map((c: any) => this.mapCredentialRow(c)) };
   }
 
-  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS) {
+  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS, userId: number) {
     const horizon = new Date();
     horizon.setDate(horizon.getDate() + Math.max(1, days));
+
+    // Data-scope filter: only credentials of nurses in the user's units.
+    const visibleUnits = await this.resolveVisibleUnits(userId);
+    const nurseFilter: any = { deleted_at: null, status: 'Active' };
+    if (visibleUnits !== null) {
+      nurseFilter.home_unit_id = { in: visibleUnits.length ? visibleUnits : [-1] };
+    }
 
     const rows = await this.prisma.nursing_credentials.findMany({
       where: {
         deleted_at: null,
         status: { in: ['Valid', 'ExpiringSoon'] },
         expiry_date: { lte: horizon },
-        nurse: { deleted_at: null, status: 'Active' },
+        nurse: nurseFilter,
       },
       include: {
         nurse: { select: { id: true, employee_number: true, first_name: true, last_name: true } },
@@ -433,13 +635,16 @@ export class NursingService {
   // Roster assignments
   // ==========================================================================
 
-  async listRoster(params: {
-    from?: string;
-    to?: string;
-    unitId?: number;
-    nurseId?: number;
-    status?: string;
-  }) {
+  async listRoster(
+    params: {
+      from?: string;
+      to?: string;
+      unitId?: number;
+      nurseId?: number;
+      status?: string;
+    },
+    userId: number,
+  ) {
     const from = params.from ? new Date(params.from) : this.startOfToday();
     const to = params.to ? new Date(params.to) : new Date(from.getTime() + 31 * 86400000);
     const where: any = {
@@ -449,6 +654,12 @@ export class NursingService {
     if (params.unitId) where.nursing_unit_id = params.unitId;
     if (params.nurseId) where.nurse_id = params.nurseId;
     if (params.status) where.status = params.status;
+
+    // Data-scope filter: only roster rows for units the user may see.
+    const visibleUnits = await this.resolveVisibleUnits(userId);
+    if (visibleUnits !== null) {
+      where.nursing_unit_id = { in: visibleUnits.length ? visibleUnits : [-1] };
+    }
 
     const rows = await this.prisma.nursing_roster_assignments.findMany({
       where,
@@ -469,8 +680,8 @@ export class NursingService {
     };
   }
 
-  async createRosterAssignment(dto: CreateRosterAssignmentDto, actorId: number) {
-    await this.ensureNurseExists(dto.nurse_id);
+  async createRosterAssignment(dto: CreateRosterAssignmentDto, actorId: number, userId: number) {
+    await this.assertCanAccessNurse(userId, dto.nurse_id);
     try {
       const created = await this.prisma.nursing_roster_assignments.create({
         data: {

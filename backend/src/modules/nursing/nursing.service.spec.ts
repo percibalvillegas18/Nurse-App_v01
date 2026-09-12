@@ -3,7 +3,7 @@
  * Covers: list filters/pagination, credential summary, unique-conflict mapping
  * (P2002 -> 409), double-booking prevention, 404s, soft deletes.
  */
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { NursingService } from './nursing.service';
 
 const DAY = 86400000;
@@ -13,9 +13,16 @@ class FakePrisma {
   nurses: any[] = [];
   credentials: any[] = [];
   roster: any[] = [];
+  // Data-scope fixtures: default grants user 1 'All' so the pre-existing
+  // CRUD tests behave exactly as before; scope tests override this per-case.
+  dataScopes: any[] = [
+    { user_id: 1, scope_type: 'All', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: null, effective_from: null, effective_to: null },
+  ];
+  organizations = [{ id: 1, code: 'CENTRAL_HOSP', name: 'Central Hospital' }];
+  departments = [{ id: 10, code: 'ICU', name: 'ICU', organization_id: 1 }];
   units = [
-    { id: 1, code: 'ICU_A', name: 'ICU Unit A' },
-    { id: 2, code: 'ICU_B', name: 'ICU Unit B' },
+    { id: 1, code: 'ICU_A', name: 'ICU Unit A', department_id: 10, department: { id: 10, organization_id: 1 } },
+    { id: 2, code: 'ICU_B', name: 'ICU Unit B', department_id: 10, department: { id: 10, organization_id: 1 } },
   ];
   shifts = [
     { id: 1, code: 'MORNING', name: 'Morning Shift', start_time: '07:00', end_time: '15:00' },
@@ -26,7 +33,11 @@ class FakePrisma {
     findMany: async ({ where, skip = 0, take = 20 }: any) => {
       let rows = this.nurses.filter((n) => !n.deleted_at);
       if (where?.status) rows = rows.filter((n) => n.status === where.status);
-      if (where?.home_unit_id) rows = rows.filter((n) => n.home_unit_id === where.home_unit_id);
+      if (where?.home_unit_id?.in) {
+        rows = rows.filter((n) => where.home_unit_id.in.includes(n.home_unit_id));
+      } else if (where?.home_unit_id) {
+        rows = rows.filter((n) => n.home_unit_id === where.home_unit_id);
+      }
       if (where?.OR) {
         const q = where.OR[0].first_name.contains.toLowerCase();
         rows = rows.filter(
@@ -172,7 +183,11 @@ class FakePrisma {
         rows = rows.filter((a) => a.assignment_date >= where.assignment_date.gte);
       if (where?.assignment_date?.lte)
         rows = rows.filter((a) => a.assignment_date <= where.assignment_date.lte);
-      if (where?.nursing_unit_id) rows = rows.filter((a) => a.nursing_unit_id === where.nursing_unit_id);
+      if (where?.nursing_unit_id?.in) {
+        rows = rows.filter((a) => where.nursing_unit_id.in.includes(a.nursing_unit_id));
+      } else if (where?.nursing_unit_id) {
+        rows = rows.filter((a) => a.nursing_unit_id === where.nursing_unit_id);
+      }
       if (where?.nurse_id) rows = rows.filter((a) => a.nurse_id === where.nurse_id);
       if (where?.status) rows = rows.filter((a) => a.status === where.status);
       return rows.map((a) => ({
@@ -225,7 +240,25 @@ class FakePrisma {
   };
 
   system_hospital_roles = { findMany: async () => [] };
-  rbac_nursing_units = { findMany: async () => this.units };
+  rbac_nursing_units = {
+    findMany: async ({ where }: any) => {
+      let rows = this.units;
+      if (where?.department_id?.in) rows = rows.filter((u) => where.department_id.in.includes(u.department_id));
+      if (where?.department?.organization_id?.in) {
+        rows = rows.filter((u) => where.department.organization_id.in.includes(u.department.organization_id));
+      }
+      if (where?.status) rows = rows.filter((u) => ((u as any).status ?? 'Active') === where.status);
+      return rows;
+    },
+  };
+  rbac_user_data_scopes = {
+    findMany: async ({ where }: any) => {
+      let rows = this.dataScopes;
+      if (where?.user_id) rows = rows.filter((s) => s.user_id === where.user_id);
+      if (where?.status) rows = rows.filter((s) => s.status === where.status);
+      return rows;
+    },
+  };
   rbac_shifts = { findMany: async () => this.shifts };
   rbac_posts = { findMany: async () => [] };
 }
@@ -324,7 +357,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('lists with search + pagination shape', async () => {
-      const res = await service.listNurses({ search: 'garcia', page: 1, limit: 10 });
+      const res = await service.listNurses({ search: 'garcia', page: 1, limit: 10 }, 1);
       expect(res.items).toHaveLength(1);
       expect(res.items[0].fullName).toBe('Maria Garcia');
       expect(res.pagination).toEqual({
@@ -338,7 +371,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('returns 404 for unknown nurse and audits nothing', async () => {
-      await expect(service.getNurse(999)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.getNurse(999, 1)).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('soft delete marks terminated + deleted_at and audit logs', async () => {
@@ -349,8 +382,8 @@ describe('NURSING SERVICE', () => {
       expect(stored.status).toBe('Terminated');
       expect(audits[audits.length - 1].action).toBe('NURSE_DELETED');
       // and it disappears from lists / detail
-      await expect(service.getNurse(1)).rejects.toBeInstanceOf(NotFoundException);
-      const res2 = await service.listNurses({ page: 1, limit: 10 });
+      await expect(service.getNurse(1, 1)).rejects.toBeInstanceOf(NotFoundException);
+      const res2 = await service.listNurses({ page: 1, limit: 10 }, 1);
       expect(res2.items).toHaveLength(0);
     });
   });
@@ -403,12 +436,12 @@ describe('NURSING SERVICE', () => {
     });
 
     it('expiring list includes near-expiry and flags nurse summary ExpiringSoon', async () => {
-      const exp = await service.listExpiringCredentials(30);
+      const exp = await service.listExpiringCredentials(30, 1);
       expect(exp.items).toHaveLength(1);
       expect(exp.items[0].name).toBe('BLS');
       expect(exp.items[0].nurse?.fullName).toBe('Maria Garcia');
 
-      const detail = await service.getNurse(2);
+      const detail = await service.getNurse(2, 1);
       expect(detail.nurse.credentialSummary).toBe('ExpiringSoon');
       expect(detail.nurse.credentialCounts.expiringSoon).toBe(1);
     });
@@ -423,6 +456,7 @@ describe('NURSING SERVICE', () => {
           shift_id: 1,
           assignment_date: dateOnly(new Date(Date.now() + 2 * DAY)),
         } as any,
+        1,
         1,
       );
       expect(assignment.nurseName).toBe('Maria Garcia');
@@ -441,6 +475,7 @@ describe('NURSING SERVICE', () => {
             assignment_date: dateOnly(new Date(Date.now() + 2 * DAY)),
           } as any,
           1,
+          1,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
     });
@@ -454,6 +489,7 @@ describe('NURSING SERVICE', () => {
           assignment_date: dateOnly(new Date(Date.now() + 2 * DAY)),
         } as any,
         1,
+        1,
       );
       expect(assignment.shiftCode).toBe('EVENING');
     });
@@ -461,12 +497,134 @@ describe('NURSING SERVICE', () => {
     it('soft delete marks cancelled and removes from window list', async () => {
       const res = await service.softDeleteRosterAssignment(2, 1);
       expect(res.message).toContain('deleted');
-      const list = await service.listRoster({
-        from: dateOnly(new Date()),
-        to: dateOnly(new Date(Date.now() + 7 * DAY)),
-      });
+      const list = await service.listRoster(
+        {
+          from: dateOnly(new Date()),
+          to: dateOnly(new Date(Date.now() + 7 * DAY)),
+        },
+        1,
+      );
       expect(list.items.find((a: any) => a.id === 2)).toBeUndefined();
       expect(list.items.find((a: any) => a.id === 1)).toBeDefined();
     });
+  });
+});
+
+describe('DATA SCOPE ENFORCEMENT', () => {
+  let service: NursingService;
+  let fake: FakePrisma;
+  let audits: any[];
+
+  const makeNurse = (id: number, homeUnitId: number, first: string, last: string) => ({
+    id,
+    employee_number: `EMP-${id}`,
+    job_no: `JOB-${id}`,
+    first_name: first,
+    middle_name: null,
+    last_name: last,
+    gender: 'Female',
+    date_of_birth: null,
+    nationality: 'Saudi',
+    phone: null,
+    hire_date: null,
+    employment_type: 'FullTime',
+    home_unit_id: homeUnitId,
+    user_id: null,
+    status: 'Active',
+    primary_role: null,
+    deleted_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
+
+  beforeEach(() => {
+    fake = new FakePrisma();
+    audits = [];
+    const mockAudit = { log: jest.fn(async (entry: any) => void audits.push(entry)) };
+    service = new NursingService(fake as any, mockAudit as any);
+
+    // Two nurses in different units; unit 1 = ICU_A (dept 10, org 1), unit 2 = ICU_B.
+    fake.nurses.push(
+      makeNurse(101, 1, 'Alice', 'Ward'),
+      makeNurse(102, 2, 'Bob', 'Other'),
+    );
+    // Replace the default 'All' scope with none; each test sets its own.
+    fake.dataScopes = [];
+  });
+
+  it('denies all PHI reads when the user has no active scope (fail closed)', async () => {
+    await expect(service.listNurses({ page: 1, limit: 10 }, 12)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(service.getNurse(101, 12)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      service.listRoster({ from: dateOnly(new Date()), to: dateOnly(new Date(Date.now() + 7 * DAY)) }, 12),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('unit scope limits listNurses to the granted unit', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    const res = await service.listNurses({ page: 1, limit: 10 }, 10);
+    expect(res.items.map((n: any) => n.id)).toEqual([101]);
+    expect(res.pagination.total).toBe(1);
+  });
+
+  it('unit scope denies reading a nurse in another unit', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(service.getNurse(102, 10)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.getNurse(101, 10)).resolves.toBeDefined();
+  });
+
+  it('department scope covers every unit in that department', async () => {
+    fake.dataScopes = [
+      { user_id: 11, scope_type: 'Department', status: 'Active', organization_id: null, department_id: 10, nursing_unit_id: null, effective_from: null, effective_to: null },
+    ];
+    const res = await service.listNurses({ page: 1, limit: 10 }, 11);
+    expect(res.items.map((n: any) => n.id).sort()).toEqual([101, 102]);
+  });
+
+  it('hospital scope covers the whole organisation', async () => {
+    fake.dataScopes = [
+      { user_id: 13, scope_type: 'Hospital', status: 'Active', organization_id: 1, department_id: null, nursing_unit_id: null, effective_from: null, effective_to: null },
+    ];
+    const res = await service.listNurses({ page: 1, limit: 10 }, 13);
+    expect(res.items).toHaveLength(2);
+  });
+
+  it('blocks roster creation for a nurse outside the unit scope', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    await expect(
+      service.createRosterAssignment(
+        {
+          nurse_id: 102,
+          nursing_unit_id: 2,
+          shift_id: 1,
+          assignment_date: dateOnly(new Date(Date.now() + 2 * DAY)),
+        } as any,
+        10,
+        10,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('filters roster list to the user\'s units', async () => {
+    fake.dataScopes = [
+      { user_id: 10, scope_type: 'NursingUnit', status: 'Active', organization_id: null, department_id: null, nursing_unit_id: 1, effective_from: null, effective_to: null },
+    ];
+    fake.roster.push(
+      { id: 1, nurse_id: 101, nursing_unit_id: 1, shift_id: 1, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+      { id: 2, nurse_id: 102, nursing_unit_id: 2, shift_id: 1, assignment_date: new Date(Date.now() + DAY), status: 'Scheduled', deleted_at: null },
+    );
+    const res = await service.listRoster(
+      { from: dateOnly(new Date()), to: dateOnly(new Date(Date.now() + 7 * DAY)) },
+      10,
+    );
+    expect(res.items.map((a: any) => a.id)).toEqual([1]);
   });
 });

@@ -53,21 +53,25 @@ export class NursingController {
     @Query('unitId') unitId?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit?: number,
+    @Req() req?: any,
   ) {
-    const data = await this.nursingService.listNurses({
-      search,
-      status,
-      unitId: unitId ? parseInt(unitId, 10) : undefined,
-      page,
-      limit,
-    });
+    const data = await this.nursingService.listNurses(
+      {
+        search,
+        status,
+        unitId: unitId ? parseInt(unitId, 10) : undefined,
+        page,
+        limit,
+      },
+      req.user.id,
+    );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Get('nurses/:id')
   @RequirePermission({ menuCode: 'NURSE_MASTER', permissionCode: 'VIEW', resourceIdParam: 'id' })
-  async getNurse(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.nursingService.getNurse(id);
+  async getNurse(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const data = await this.nursingService.getNurse(id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
@@ -102,16 +106,17 @@ export class NursingController {
 
   @Get('nurses/:id/credentials')
   @CanView('CREDENTIALS')
-  async listNurseCredentials(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.nursingService.listNurseCredentials(id);
+  async listNurseCredentials(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const data = await this.nursingService.listNurseCredentials(id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Get('credentials/expiring')
   @CanView('CREDENTIALS')
-  async listExpiringCredentials(@Query('days') days?: string) {
+  async listExpiringCredentials(@Query('days') days?: string, @Req() req?: any) {
     const data = await this.nursingService.listExpiringCredentials(
       days ? parseInt(days, 10) : undefined,
+      req.user.id,
     );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -157,21 +162,25 @@ export class NursingController {
     @Query('unitId') unitId?: string,
     @Query('nurseId') nurseId?: string,
     @Query('status') status?: string,
+    @Req() req?: any,
   ) {
-    const data = await this.nursingService.listRoster({
-      from,
-      to,
-      unitId: unitId ? parseInt(unitId, 10) : undefined,
-      nurseId: nurseId ? parseInt(nurseId, 10) : undefined,
-      status,
-    });
+    const data = await this.nursingService.listRoster(
+      {
+        from,
+        to,
+        unitId: unitId ? parseInt(unitId, 10) : undefined,
+        nurseId: nurseId ? parseInt(nurseId, 10) : undefined,
+        status,
+      },
+      req.user.id,
+    );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Post('roster')
   @CanCreate('NURSE_ROSTER')
   async createRosterAssignment(@Body() dto: CreateRosterAssignmentDto, @Req() req: any) {
-    const data = await this.nursingService.createRosterAssignment(dto, req.user.id);
+    const data = await this.nursingService.createRosterAssignment(dto, req.user.id, req.user.id);
     return { success: true, statusCode: 201, data, timestamp: new Date().toISOString() };
   }
 
