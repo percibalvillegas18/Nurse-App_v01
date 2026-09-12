@@ -114,8 +114,8 @@ export class RbacService {
     });
 
     if (accessibleOnly && userId) {
-      // Try cache for accessible menus
-      const cached = (await this.redisService.getAccessibleMenus(userId)) as any[] | null;
+      // Try cache for accessible menu tree (separate key from the flat menu list)
+      const cached = (await this.redisService.getAccessibleMenuTree(userId)) as any[] | null;
       if (cached) {
         return cached;
       }
@@ -168,7 +168,7 @@ export class RbacService {
 
     // Cache hierarchy for accessibleOnly case
     if (accessibleOnly && userId) {
-      await this.redisService.setAccessibleMenus(userId, tree, 300).catch((e) => this.logger.warn(`Cache set failed: ${e.message}`));
+      await this.redisService.setAccessibleMenuTree(userId, tree, 300).catch((e) => this.logger.warn(`Cache set failed: ${e.message}`));
     }
 
     return tree;

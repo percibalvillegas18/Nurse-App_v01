@@ -250,6 +250,19 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Key for the accessible menu *tree* (nested hierarchy for navigation).
+   * Format: rbac:menu-tree:{userId}
+   *
+   * This is intentionally separate from buildMenusKey(): the flat menu list and
+   * the nested tree have different shapes, and both used to be cached under
+   * rbac:menus:{userId}, so whichever endpoint ran last clobbered the other's
+   * payload and the sidebar could read a flat list where it expected a tree.
+   */
+  buildMenuTreeKey(userId: number): string {
+    return `rbac:menu-tree:${userId}`;
+  }
+
+  /**
    * Key for role-based invalidation tracking
    * Format: rbac:role:{roleCode}:users -> Set of userIds that have this role
    */
@@ -291,6 +304,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.set(this.buildMenusKey(userId), menus, ttl);
   }
 
+  async getAccessibleMenuTree<T>(userId: number): Promise<T | null> {
+    return this.get<T>(this.buildMenuTreeKey(userId));
+  }
+
+  async setAccessibleMenuTree(userId: number, tree: any, ttl = 300): Promise<boolean> {
+    return this.set(this.buildMenuTreeKey(userId), tree, ttl);
+  }
+
   // ========================================================================
   // Invalidation strategies
   // ========================================================================
@@ -305,6 +326,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       `rbac:access:${userId}:*`,
       `rbac:full:${userId}`,
       `rbac:menus:${userId}`,
+      `rbac:menu-tree:${userId}`,
     ];
 
     let totalDeleted = 0;
@@ -358,6 +380,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         `rbac:access:*`,
         `rbac:full:*`,
         `rbac:menus:*`,
+        `rbac:menu-tree:*`,
       ];
       for (const pattern of patterns) {
         const deleted = await this.delPattern(pattern);
@@ -403,6 +426,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       `rbac:access:*`,
       `rbac:full:*`,
       `rbac:menus:*`,
+      `rbac:menu-tree:*`,
       `rbac:role:*:users`,
     ];
 

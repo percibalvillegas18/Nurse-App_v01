@@ -44,6 +44,12 @@ export class CacheController {
             ttl: '300s',
             invalidation: 'On role_menu_access change',
           },
+          menuTree: {
+            keyPattern: 'rbac:menu-tree:{userId}',
+            ttl: '300s',
+            purpose: 'Nested menu hierarchy for navigation (separate key from the flat menu list)',
+            invalidation: 'On role_menu_access change',
+          },
           roleTracking: {
             keyPattern: 'rbac:role:{roleCode}:users',
             ttl: '3600s',

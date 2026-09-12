@@ -11,7 +11,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { AuditService } from './audit.service';
 import { RbacGuard } from '../../common/guards/rbac.guard';
-import { CanView } from '../../common/decorators/require-permission.decorator';
+import { CanView, RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 /**
  * Audit trail API.
@@ -94,7 +94,7 @@ export class AuditController {
    * Streams a file rather than JSON so the browser downloads it directly.
    */
   @Get('export')
-  @UseGuards(AuthGuard('jwt'), RbacGuard)
+  @RequirePermission({ menuCode: 'AUDIT_LOGS', permissionCode: 'EXPORT' })
   async exportLogs(
     @Query()
     query: {

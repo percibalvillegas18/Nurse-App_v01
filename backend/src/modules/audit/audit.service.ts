@@ -88,12 +88,14 @@ export class AuditService {
    */
   async verifyChain(fromId?: number, toId?: number): Promise<AuditChainBreak[]> {
     try {
-      const rows = await this.prisma.$queryRawUnsafe<AuditChainBreak[]>(
+      // $queryRawUnsafe on the PrismaService wrapper is not generic, so cast
+      // the result instead of passing a type argument (TS2558).
+      const rows = (await this.prisma.$queryRawUnsafe(
         `SELECT id, expected_prev, actual_prev, problem
          FROM audit.verify_audit_chain($1::bigint, $2::bigint)`,
         fromId ?? null,
         toId ?? null,
-      );
+      )) as AuditChainBreak[];
       if (rows.length > 0) {
         this.logger.error(
           `AUDIT CHAIN INTEGRITY FAILURE: ${rows.length} broken link(s) detected`,
