@@ -66,6 +66,10 @@ services:
       API_HOST: 0.0.0.0
       JWT_SECRET: dev-secret-key-change-in-production-please-use-64-chars-min
       JWT_REFRESH_SECRET: dev-refresh-secret-change-in-production-please-use-64-chars
+      # Session time windows (seconds) - see backend/.env.example.
+      SESSION_IDLE_TIMEOUT: 900
+      SESSION_TIMEOUT: 3600
+      SESSION_ABSOLUTE_TIMEOUT: 86400
       CORS_ORIGIN: http://localhost:3000,http://localhost:80
     ports:
       - "4000:4000"
