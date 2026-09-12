@@ -436,8 +436,18 @@ model rbac_user_data_scopes {
 // AUDIT SCHEMA
 // ============================================================================
 
+// NOTE: audit.audit_logs is physically managed by the raw SQL runner, not by
+// Prisma Migrate. Since V3_6 it is PARTITION BY RANGE (created_at), which
+// forces the primary key to include the partition column, so the real table's
+// PK is (id, created_at) — reflected here as a composite @@id. Do NOT run
+// `prisma migrate` / `prisma db push` against this table.
+//
+// `id` is still a single global sequence, so the app queries it as a plain
+// scalar and `findFirst({ orderBy: { id: 'desc' } })` keeps working.
+// prev_hash / entry_hash are nullable here only because the database trigger
+// (trg_audit_hash_chain, V3_5) computes them on INSERT; the app never sets them.
 model audit_audit_logs {
-  id            BigInt   @id @default(autoincrement())
+  id            BigInt   @default(autoincrement())
   user_id       BigInt?
   username      String?  @db.VarChar(100)
   action        String   @db.VarChar(100)
@@ -459,6 +469,7 @@ model audit_audit_logs {
   /// SHA-256 hex of (prev_hash + canonical payload). Set by DB trigger.
   entry_hash    String?  @db.Text
 
+  @@id([id, created_at])
   @@index([user_id])
   @@index([action])
   @@index([entity_type])
