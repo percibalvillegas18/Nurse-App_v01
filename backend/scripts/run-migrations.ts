@@ -27,6 +27,7 @@ const order = [
   'V3_6__audit_log_partitioning.sql',
   'V4_0__contract_master.sql',
   'V4_1__contract_expiry_alerts.sql',
+  'V4_2__contract_active_exclusivity.sql',
 ];
 
 interface Flags {
@@ -123,9 +124,7 @@ async function run() {
 
     if (flags.baseline) {
       await client.query(
-        `INSERT INTO public.schema_migrations (filename, checksum, status, applied_by)
-         VALUES ($1, $2, 'Success', $3)
-         ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, status = 'Success'`,
+        `INSERT INTO public.schema_migrations (filename, checksum, status, applied_by)\n         VALUES ($1, $2, 'Success', $3)\n         ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum, status = 'Success'`,
         [file, checksum, 'baseline'],
       );
       console.log(`${file} baselined`);
@@ -140,11 +139,7 @@ async function run() {
       await client.query(sql);
       const duration = Date.now() - startedAt;
       await client.query(
-        `INSERT INTO public.schema_migrations (filename, checksum, duration_ms, status, applied_by)
-         VALUES ($1, $2, $3, 'Success', $4)
-         ON CONFLICT (filename) DO UPDATE
-           SET checksum = EXCLUDED.checksum, duration_ms = EXCLUDED.duration_ms,
-               status = 'Success', applied_at = now()`,
+        `INSERT INTO public.schema_migrations (filename, checksum, duration_ms, status, applied_by)\n         VALUES ($1, $2, $3, 'Success', $4)\n         ON CONFLICT (filename) DO UPDATE\n           SET checksum = EXCLUDED.checksum, duration_ms = EXCLUDED.duration_ms,\n               status = 'Success', applied_at = now()`,
         [file, checksum, duration, process.env.USER || 'unknown'],
       );
       await client.query('COMMIT');
