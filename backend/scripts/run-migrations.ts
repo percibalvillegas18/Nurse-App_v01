@@ -32,6 +32,7 @@ const order = [
   'V3_4__nurse_job_no.sql',
   'V3_5__tamper_proof_audit_logs.sql',
   'V3_6__audit_log_partitioning.sql',
+  'V3_7__data_scope_resource_validation.sql',
 ];
 
 interface Flags {

@@ -53,6 +53,7 @@ export class NursingController {
     @Query('unitId') unitId?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit?: number,
+    @Req() req?: any,
   ) {
     const data = await this.nursingService.listNurses({
       search,
@@ -60,6 +61,7 @@ export class NursingController {
       unitId: unitId ? parseInt(unitId, 10) : undefined,
       page,
       limit,
+      userId: req?.user?.id,
     });
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -102,16 +104,17 @@ export class NursingController {
 
   @Get('nurses/:id/credentials')
   @CanView('CREDENTIALS')
-  async listNurseCredentials(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.nursingService.listNurseCredentials(id);
+  async listNurseCredentials(@Param('id', ParseIntPipe) id: number, @Req() req?: any) {
+    const data = await this.nursingService.listNurseCredentials(id, req?.user?.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Get('credentials/expiring')
   @CanView('CREDENTIALS')
-  async listExpiringCredentials(@Query('days') days?: string) {
+  async listExpiringCredentials(@Query('days') days?: string, @Req() req?: any) {
     const data = await this.nursingService.listExpiringCredentials(
       days ? parseInt(days, 10) : undefined,
+      req?.user?.id,
     );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -157,6 +160,7 @@ export class NursingController {
     @Query('unitId') unitId?: string,
     @Query('nurseId') nurseId?: string,
     @Query('status') status?: string,
+    @Req() req?: any,
   ) {
     const data = await this.nursingService.listRoster({
       from,
@@ -164,6 +168,7 @@ export class NursingController {
       unitId: unitId ? parseInt(unitId, 10) : undefined,
       nurseId: nurseId ? parseInt(nurseId, 10) : undefined,
       status,
+      userId: req?.user?.id,
     });
     return { success: true, data, timestamp: new Date().toISOString() };
   }

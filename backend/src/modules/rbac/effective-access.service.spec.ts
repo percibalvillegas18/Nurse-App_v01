@@ -212,25 +212,9 @@ describe('EFFECTIVE ACCESS SERVICE - CRITICAL AUTHORIZATION TESTS', () => {
   });
 });
 
-// Integration test outline (requires real DB)
-describe('INTEGRATION - Real DB Tests (requires TEST_DATABASE_URL)', () => {
-  it.skip('should DENY inactive user', async () => {
-    // TODO: implement with real PG connection
-  });
+// Real-database tests (inactive user, temporal windows, deny-by-default, and
+// data-scope enforcement) live in effective-access.integration.spec.ts. They
+// run only when PG_INTEGRATION=true and a Postgres instance is reachable (CI
+// provides a service container); locally they are skipped so `npm test` stays
+// dependency-free.
 
-  it.skip('should DENY expired temporal access', async () => {
-    // Create role_menu_access with effective_to = yesterday, expect DENY
-  });
-
-  it.skip('should ALLOW within temporal window', async () => {
-    // effective_from yesterday, effective_to tomorrow, expect ALLOW
-  });
-
-  it.skip('should DENY if no role_menu_access record exists', async () => {
-    // New menu without access config, expect DENY (deny by default)
-  });
-
-  it.skip('ICU nurse should NOT access Medical Ward resource', async () => {
-    // Data scope enforcement
-  });
-});

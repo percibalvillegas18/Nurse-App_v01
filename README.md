@@ -96,8 +96,11 @@ psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
 psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
 psql $DATABASE_URL -f database/migrations/V3_3__drop_nurse_email.sql
 psql $DATABASE_URL -f database/migrations/V3_4__nurse_job_no.sql
+psql $DATABASE_URL -f database/migrations/V3_5__tamper_proof_audit_logs.sql
+psql $DATABASE_URL -f database/migrations/V3_6__audit_log_partitioning.sql
+psql $DATABASE_URL -f database/migrations/V3_7__data_scope_resource_validation.sql
 
-# Or use script
+# Or use script (preferred - applies in order, tracks history, validates checksums)
 npx ts-node scripts/run-migrations.ts
 
 # Prisma
@@ -143,6 +146,29 @@ Default users (password `Password123!`):
 SELECT BOOL_OR(rma.visible AND rma.enabled) FROM role_menu_access
 WHERE role_code = ANY(v_all_role_codes)
 ```
+
+## Data Scope Enforcement (V3_7)
+
+The V2_5 data-scope step only checked "does the user have *some* scope row",
+which let anyone with `NURSE_MASTER/VIEW` read every nurse in every unit.
+V3_7 replaces it with real, resource-aware enforcement:
+
+- `rbac.resource_in_scope(user_id, menu_code, resource_id, at)` — resolves a
+  nurse / credential / roster assignment to its owning nursing unit and checks
+  it against the caller's scopes through the
+  `organization → department → nursing_unit` hierarchy (plus `Post`/`Shift`
+  scopes for roster rows). Unknown menus fail closed.
+- `rbac.get_user_visible_unit_ids(user_id)` — the set of units a user may see,
+  used by `NursingService` to filter `listNurses`, `listRoster` and the
+  credentials lists **server-side** (never trusting a client-supplied filter).
+- Write operations (`createNurse`, `updateNurse`, `createRosterAssignment`,
+  `updateRosterAssignment`, `createCredential`, `updateCredential`) reject
+  targets outside the caller's units with a 403.
+
+Seed scope examples (V2_4): `susan.lee` (Nurse Manager) → ICU department,
+`maria.garcia` (RN) → ICU_A unit, `rachel.brown` (Scheduler) → whole hospital,
+HR/Compliance → `All`. These are exercised by the CI integration tests
+(`effective-access.integration.spec.ts`).
 
 ## Next Steps
 - Leave management + workforce analytics domains

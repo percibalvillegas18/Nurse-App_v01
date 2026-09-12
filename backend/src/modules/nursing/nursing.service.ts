@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../auth/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -70,13 +71,33 @@ export class NursingService {
     unitId?: number;
     page?: number;
     limit?: number;
+    userId?: number;
   }) {
     const page = Math.max(1, params.page || 1);
     const limit = Math.min(100, Math.max(1, params.limit || 20));
     const where: any = { deleted_at: null };
 
     if (params.status) where.status = params.status;
-    if (params.unitId) where.home_unit_id = params.unitId;
+
+    // Data-scope: a caller may only see nurses in units their scopes cover.
+    // null = unrestricted (mock/demo or internal call), [] = no access.
+    const visibleUnitIds = await this.getVisibleUnitIds(params.userId);
+    if (visibleUnitIds !== null) {
+      if (visibleUnitIds.length === 0) {
+        return this.emptyNursePage(page, limit);
+      }
+      if (params.unitId) {
+        if (!visibleUnitIds.includes(params.unitId)) {
+          return this.emptyNursePage(page, limit);
+        }
+        where.home_unit_id = params.unitId;
+      } else {
+        where.home_unit_id = { in: visibleUnitIds };
+      }
+    } else if (params.unitId) {
+      where.home_unit_id = params.unitId;
+    }
+
     if (params.search) {
       const q = params.search.trim();
       where.OR = [
@@ -170,6 +191,10 @@ export class NursingService {
     }
     // Job No. is typed by the user, so normalise it before the uniqueness check.
     const jobNo = dto.job_no.trim();
+
+    // Data scope: the new nurse's home unit must be within the actor's units.
+    await this.assertUnitInScope(actorId, dto.home_unit_id ?? null);
+
     try {
       const created = await this.prisma.nursing_nurses.create({
         data: {
@@ -221,6 +246,12 @@ export class NursingService {
 
   async updateNurse(id: number, dto: UpdateNurseDto, actorId: number) {
     await this.ensureNurseExists(id);
+    // Data scope: moving a nurse into a unit the actor cannot see is forbidden
+    // (reading/editing the nurse itself is already gated by RbacGuard with
+    // resourceIdParam -> rbac.resource_in_scope).
+    if (dto.home_unit_id !== undefined) {
+      await this.assertUnitInScope(actorId, dto.home_unit_id);
+    }
     try {
       const updated = await this.prisma.nursing_nurses.update({
         where: { id },
@@ -298,8 +329,9 @@ export class NursingService {
   // Credentials
   // ==========================================================================
 
-  async listNurseCredentials(nurseId: number) {
+  async listNurseCredentials(nurseId: number, actorId?: number) {
     await this.ensureNurseExists(nurseId);
+    await this.assertNurseInScope(actorId, nurseId);
     const rows = await this.prisma.nursing_credentials.findMany({
       where: { nurse_id: nurseId, deleted_at: null },
       orderBy: { expiry_date: 'asc' },
@@ -307,16 +339,26 @@ export class NursingService {
     return { items: (rows || []).map((c: any) => this.mapCredentialRow(c)) };
   }
 
-  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS) {
+  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS, actorId?: number) {
     const horizon = new Date();
     horizon.setDate(horizon.getDate() + Math.max(1, days));
+
+    // Data-scope: only surface credentials for nurses in the caller's units.
+    let nurseFilter: any = { deleted_at: null, status: 'Active' };
+    const visibleUnitIds = await this.getVisibleUnitIds(actorId);
+    if (visibleUnitIds !== null) {
+      if (visibleUnitIds.length === 0) {
+        return { days, items: [] };
+      }
+      nurseFilter = { ...nurseFilter, home_unit_id: { in: visibleUnitIds } };
+    }
 
     const rows = await this.prisma.nursing_credentials.findMany({
       where: {
         deleted_at: null,
         status: { in: ['Valid', 'ExpiringSoon'] },
         expiry_date: { lte: horizon },
-        nurse: { deleted_at: null, status: 'Active' },
+        nurse: nurseFilter,
       },
       include: {
         nurse: { select: { id: true, employee_number: true, first_name: true, last_name: true } },
@@ -342,6 +384,8 @@ export class NursingService {
 
   async createCredential(dto: CreateCredentialDto, actorId: number) {
     await this.ensureNurseExists(dto.nurse_id);
+    // Data scope: credentials can only be attached to nurses the actor can see.
+    await this.assertNurseInScope(actorId, dto.nurse_id);
     try {
       const created = await this.prisma.nursing_credentials.create({
         data: {
@@ -378,6 +422,8 @@ export class NursingService {
 
   async updateCredential(id: number, dto: UpdateCredentialDto, actorId: number) {
     await this.ensureCredentialExists(id);
+    // Data scope: only edit credentials of nurses the actor can see.
+    await this.assertCredentialInScope(actorId, id);
     const updated = await this.prisma.nursing_credentials.update({
       where: { id },
       data: {
@@ -439,6 +485,7 @@ export class NursingService {
     unitId?: number;
     nurseId?: number;
     status?: string;
+    userId?: number;
   }) {
     const from = params.from ? new Date(params.from) : this.startOfToday();
     const to = params.to ? new Date(params.to) : new Date(from.getTime() + 31 * 86400000);
@@ -446,7 +493,25 @@ export class NursingService {
       deleted_at: null,
       assignment_date: { gte: from, lte: to },
     };
-    if (params.unitId) where.nursing_unit_id = params.unitId;
+
+    // Data-scope: restrict the roster window to the caller's visible units.
+    const visibleUnitIds = await this.getVisibleUnitIds(params.userId);
+    if (visibleUnitIds !== null) {
+      if (visibleUnitIds.length === 0) {
+        return { from: this.toDateOnly(from), to: this.toDateOnly(to), items: [] };
+      }
+      if (params.unitId) {
+        if (!visibleUnitIds.includes(params.unitId)) {
+          return { from: this.toDateOnly(from), to: this.toDateOnly(to), items: [] };
+        }
+        where.nursing_unit_id = params.unitId;
+      } else {
+        where.nursing_unit_id = { in: visibleUnitIds };
+      }
+    } else if (params.unitId) {
+      where.nursing_unit_id = params.unitId;
+    }
+
     if (params.nurseId) where.nurse_id = params.nurseId;
     if (params.status) where.status = params.status;
 
@@ -471,6 +536,8 @@ export class NursingService {
 
   async createRosterAssignment(dto: CreateRosterAssignmentDto, actorId: number) {
     await this.ensureNurseExists(dto.nurse_id);
+    // Data scope: assignments may only be created for units the actor can see.
+    await this.assertUnitInScope(actorId, dto.nursing_unit_id);
     try {
       const created = await this.prisma.nursing_roster_assignments.create({
         data: {
@@ -511,6 +578,10 @@ export class NursingService {
 
   async updateRosterAssignment(id: number, dto: UpdateRosterAssignmentDto, actorId: number) {
     await this.ensureRosterExists(id);
+    // Data scope: an assignment may only be moved into a unit the actor can see.
+    if (dto.nursing_unit_id !== undefined) {
+      await this.assertUnitInScope(actorId, dto.nursing_unit_id);
+    }
     try {
       const updated = await this.prisma.nursing_roster_assignments.update({
         where: { id },
@@ -644,6 +715,83 @@ export class NursingService {
   private async ensureRosterExists(id: number) {
     const row = await this.prisma.nursing_roster_assignments.findUnique({ where: { id } });
     if (!row || row.deleted_at) throw new NotFoundException(`Roster assignment #${id} not found`);
+  }
+
+  // ==========================================================================
+  // Data-scope helpers
+  // ==========================================================================
+
+  /**
+   * True when data-scope checks must be skipped: mock/preview mode, or a
+   * Prisma fake without raw-query support (unit tests). When disabled,
+   * getVisibleUnitIds() returns null so callers treat the user as unrestricted.
+   */
+  private isScopeCheckDisabled(): boolean {
+    const prisma: any = this.prisma;
+    if (typeof prisma.isMockMode === 'function' && prisma.isMockMode()) return true;
+    return typeof prisma.$queryRawUnsafe !== 'function';
+  }
+
+  /**
+   * The nursing_unit ids visible to a user under their active data scopes.
+   * null = unrestricted (no user supplied, mock mode, or no raw access);
+   * []  = the user has no matching scope and therefore sees nothing.
+   */
+  private async getVisibleUnitIds(userId?: number): Promise<number[] | null> {
+    if (userId == null) return null;
+    if (this.isScopeCheckDisabled()) return null;
+    const rows = (await this.prisma.$queryRawUnsafe(
+      `SELECT nursing_unit_id FROM rbac.get_user_visible_unit_ids($1)`,
+      userId,
+    )) as Array<{ nursing_unit_id: bigint | number }>;
+    return rows.map((r) => Number(r.nursing_unit_id));
+  }
+
+  private async assertUnitInScope(userId: number, unitId?: number | null): Promise<void> {
+    if (userId == null || unitId == null) return;
+    const visible = await this.getVisibleUnitIds(userId);
+    if (visible === null) return; // unrestricted (mock/demo/fake)
+    if (!visible.includes(Number(unitId))) {
+      throw new ForbiddenException('Nursing unit is outside your data scope');
+    }
+  }
+
+  private async assertNurseInScope(userId?: number, nurseId?: number): Promise<void> {
+    if (userId == null || nurseId == null) return;
+    if (this.isScopeCheckDisabled()) return;
+    const row = await this.prisma.nursing_nurses.findUnique({
+      where: { id: nurseId },
+      select: { home_unit_id: true },
+    });
+    if (!row || row.home_unit_id == null) {
+      throw new ForbiddenException('Nurse is outside your data scope');
+    }
+    await this.assertUnitInScope(userId, Number(row.home_unit_id));
+  }
+
+  private async assertCredentialInScope(userId: number, credentialId: number): Promise<void> {
+    if (userId == null || credentialId == null) return;
+    if (this.isScopeCheckDisabled()) return;
+    const row = await this.prisma.nursing_credentials.findUnique({
+      where: { id: credentialId },
+      select: { nurse_id: true },
+    });
+    if (!row) return; // ensureCredentialExists already raised 404
+    await this.assertNurseInScope(userId, Number(row.nurse_id));
+  }
+
+  private emptyNursePage(page: number, limit: number) {
+    return {
+      items: [],
+      pagination: {
+        page,
+        limit,
+        total: 0,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      },
+    };
   }
 
   /** Map Prisma unique-violation (P2002) to a friendly 409, rethrow otherwise. */
