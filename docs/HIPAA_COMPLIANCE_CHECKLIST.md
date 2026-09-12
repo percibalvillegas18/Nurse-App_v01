@@ -59,21 +59,21 @@
 
 | Control | Requirement | Current Status | Evidence / Gap | Priority |
 |---------|-------------|----------------|----------------|----------|
-| Hardware / software / procedural mechanisms that record and examine activity | Comprehensive logging of PHI access | ⚠️ | `AuditInterceptor` logs mutating requests; AuthService logs login success/failure/lockout; **reads of PHI are not systematically logged** | High |
-| Tamper-evident / immutable logs | Logs cannot be altered by application users | ⚠️ | RLS on audit tables prevents UPDATE/DELETE for normal roles; superuser still can | Medium |
-| Retention | Minimum 6 years | ❌ | No retention policy or partitioning implemented | High |
-| PHI exclusion from application logs | Never log full PHI in application/debug logs | ⚠️ | Interceptor sanitizes passwords/tokens; body still may contain names/DOB | Medium |
+| Hardware / software / procedural mechanisms that record and examine activity | Comprehensive logging of PHI access | ✅ | `AuditInterceptor` logs all mutations AND metadata-only reads of nurse/credential/roster (`VIEW_*` actions); AuthService logs login success/failure/lockout | High |
+| Tamper-evident / immutable logs | Logs cannot be altered by application users | ✅ | BEFORE UPDATE/DELETE triggers (`fn_audit_immutable`) + RLS forbid changes even for table owners; SHA-256 hash chain (`prev_hash`/`entry_hash`) + `verify_audit_chain()` (V3_5/V3_6) | Medium |
+| Retention | Minimum 6 years | ⚠️ | Monthly RANGE partitioning + `drop_audit_partitions_older_than('6 years')` (V3_6); **a scheduled archival/retention job still needs to be wired in ops** | High |
+| PHI exclusion from application logs | Never log full PHI in application/debug logs | ⚠️ | Interceptor sanitizes passwords/tokens and stores metadata only for PHI reads (no response bodies); mutation bodies may still contain names/DOB | Medium |
 
 **Code references**
-- `backend/src/common/interceptors/audit.interceptor.ts`
+- `backend/src/common/interceptors/audit.interceptor.ts` (PHI-read + mutation logging)
 - `backend/src/modules/audit/audit.service.ts`
+- `V3_5__tamper_proof_audit_logs.sql`, `V3_6__audit_log_partitioning.sql`
 - Auth audit events in `auth.service.ts`
 
 **Recommended next steps**
-1. Extend audit to cover **read** access of nurse records, credentials, and roster (configurable high-sensitivity endpoints).
-2. Partition `audit_logs` by month and implement 6-year retention + archival job.
-3. Move audit storage to append-only / separate database or use cryptographic hash chaining.
-4. Add redaction middleware that strips or hashes known PHI fields before any log write.
+1. Add redaction middleware that strips or hashes known PHI fields from mutation bodies before any log write.
+2. Schedule the retention job (`audit.drop_audit_partitions_older_than`) and `ensure_audit_partitions_ahead` in production ops (cron / pg_cron).
+3. Move `AuditService.log()` failures into an explicit error metric/alert (audit writes currently fail non-blocking by design).
 
 ---
 
@@ -81,12 +81,12 @@
 
 | Control | Requirement | Current Status | Evidence / Gap | Priority |
 |---------|-------------|----------------|----------------|----------|
-| Protect ePHI from improper alteration or destruction | Mechanisms to authenticate data integrity | ⚠️ | Application-level validation + RBAC; no cryptographic integrity checks on stored records | Medium |
-| Mechanism to corroborate integrity | Checksums / digital signatures where appropriate | ❌ | None | Low (for current scope) |
+| Protect ePHI from improper alteration or destruction | Mechanisms to authenticate data integrity | ⚠️ | Application-level validation + RBAC; audit trail is cryptographically chained but **stored ePHI records lack record-level signatures/version columns** | Medium |
+| Mechanism to corroborate integrity | Checksums / digital signatures where appropriate | ✅ | SHA-256 hash chain on `audit.audit_logs` (prev_hash/entry_hash, V3_5/V3_6) + `verify_audit_chain()`; stored ePHI rows themselves are not signed | Low (for current scope) |
 
 **Recommended next steps**
-- Add database constraints, triggers, and application-level optimistic concurrency (version columns) for critical tables.
-- Consider signed audit entries for high-risk actions.
+- Add optimistic concurrency (version columns) + DB triggers for critical tables.
+- Consider record-level signatures for the highest-sensitivity attributes if required by the risk analysis.
 
 ---
 
@@ -125,7 +125,7 @@
 | Security Management Process (risk analysis) | 📋 | Formal risk analysis required; update when architecture changes |
 | Assigned Security Responsibility | 📋 | Designate a Security Officer |
 | Workforce Security (authorization, clearance, termination) | ⚠️ | User Management + role deactivation exist; formal off-boarding procedure needed |
-| Information Access Management | ✅ / ⚠️ | Strong RBAC; data-scope enforcement still incomplete for resource-level checks |
+| Information Access Management | ✅ / ⚠️ | Strong RBAC; resource-aware data scope enforced for nurses/credentials/roster (V3_7 + NursingService); `Post`/`Shift`/`Assigned` scope types still TODO |
 | Security Awareness & Training | 📋 | Required for all workforce with PHI access; retain records 6 years |
 | Security Incident Procedures | 📋 | Incident response plan + breach notification process required |
 | Contingency Plan (backup, disaster recovery, emergency mode) | ❌ / 🌐 | No documented backup/restore tested procedures yet |
@@ -164,7 +164,10 @@ These are primarily the responsibility of the hosting provider and facility:
 
 - **Strong unique user identification** and session binding
 - **Mature RBAC** with multi-role evaluation, deny-by-default, temporal validity
-- **Audit trail** for mutations + authentication events (login success/failure/lockout)
+- **Resource-aware data scopes** (org/dept/unit) enforced on nursing reads + roster writes (fail-closed)
+- **Audit trail** for mutations + authentication events + metadata-only PHI reads
+- **Tamper-evident audit log**: append-only triggers, RLS, SHA-256 hash chain + `verify_audit_chain()`
+- **Audit partitioning + retention**: monthly RANGE partitions + 6-year retention helper (V3_6)
 - **Account lockout** (per-account + per-IP) with durable persistence
 - **Password hashing** at bcrypt cost 12
 - **JWT + refresh token** model with session revocation on logout
@@ -184,9 +187,9 @@ These are primarily the responsibility of the hosting provider and facility:
 
 ### High
 6. Idle session timeout (client + server).
-7. Comprehensive audit of **read** access to nurse / credential / roster data.
-8. Audit log retention (6 years) + partitioning + immutability hardening.
-9. Complete **resource-aware data-scope** enforcement.
+7. ~~Comprehensive audit of read access~~ ✅ — AuditInterceptor now logs PHI reads (`VIEW_*`, metadata only).
+8. ~~Audit log retention + partitioning + immutability~~ ✅ — V3_5/V3_6 (hash chain, triggers, monthly partitions, 6-year retention helper); wire the scheduled retention job in ops.
+9. ~~Resource-aware data-scope enforcement~~ ✅ for nurses/credentials/roster — V3_7 + NursingService; `Post`/`Shift`/`Assigned` scope types remain.
 10. Break-glass / emergency access procedure with mandatory audit review.
 
 ### Medium
@@ -207,9 +210,9 @@ These are primarily the responsibility of the hosting provider and facility:
 [ ] Redis / Postgres connections use TLS in prod
 [ ] No shared accounts; every action attributable to a user_id
 [ ] Automatic idle logoff ≤ 15 minutes (configurable)
-[ ] RBAC + data scopes enforce least privilege on every API
-[ ] Audit logs capture who / what / when / where / outcome for PHI access
-[ ] Audit logs immutable for application users + 6-year retention
+[x] RBAC + data scopes enforce least privilege on nursing PHI APIs (Post/Shift/Assigned scopes TODO)
+[x] Audit logs capture who / what / when / where / outcome for PHI access (mutations + reads)
+[x] Audit logs immutable for application users + 6-year retention (triggers + hash chain + partitioning)
 [ ] Passwords never logged; PHI fields redacted from logs
 [ ] Session revocation works on logout and admin unlock
 [ ] Account lockout after repeated failures
@@ -226,8 +229,9 @@ These are primarily the responsibility of the hosting provider and facility:
 | HIPAA Area | Existing Artifact |
 |------------|-------------------|
 | Access control / RBAC | `rbac.guard.ts`, `evaluate_access` SQL, role matrix seeds |
+| Data scope (least privilege) | `NursingService` scope resolution, `V3_7__enforce_data_scope.sql` |
 | Authentication | `auth.service.ts`, `login-throttle.service.ts`, JWT strategy |
-| Audit | `audit.interceptor.ts`, `audit.service.ts`, RLS on audit tables |
+| Audit | `audit.interceptor.ts`, `audit.service.ts`, RLS + immutability triggers + hash chain (V3_5), partitioning (V3_6) |
 | Password security | bcrypt rounds = 12, lockout counters |
 | Session management | `auth_sessions` table, absolute timeout, revocation |
 | Data model (PHI candidates) | Nursing domain tables (V3_*), personal fields, job_no |
@@ -238,8 +242,8 @@ These are primarily the responsibility of the hosting provider and facility:
 
 1. Add MFA module (TOTP) behind feature flag.
 2. Add idle-timeout middleware + frontend idle detector.
-3. Expand `AuditInterceptor` (or dedicated PHI read logger) to sensitive GET endpoints.
-4. Add migration for audit_log partitioning + retention job.
+3. ~~Expand `AuditInterceptor` to sensitive GET endpoints~~ ✅ — done (PHI read logging).
+4. ~~Add migration for audit_log partitioning~~ ✅ — V3_6; **remaining:** schedule the retention/partition-ahead job (cron / pg_cron).
 5. Production Docker / K8s manifests that force TLS and encrypted volumes.
 6. Document BAA checklist for every third-party service used.
 
