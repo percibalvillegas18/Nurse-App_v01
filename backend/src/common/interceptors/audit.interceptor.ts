@@ -10,80 +10,128 @@ import { tap } from 'rxjs/operators';
 import { AuditService } from '../../modules/audit/audit.service';
 
 /**
- * Audit Interceptor - Logs all mutating requests
- * Intercepts POST, PUT, PATCH, DELETE for audit trail
+ * Audit Interceptor — HIPAA § 164.312(b) Audit Controls
+ *
+ * Logs:
+ *  1. All mutating requests (POST / PUT / PATCH / DELETE)
+ *  2. Authenticated GET access to PHI-bearing nursing resources
+ *     (nurse master, credentials, roster)
+ *
+ * PHI read logs intentionally store only metadata (who / what resource / when /
+ * outcome). Response bodies are never written to the audit trail so the log
+ * system does not become a second copy of ePHI.
  */
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
   private readonly logger = new Logger(AuditInterceptor.name);
+
+  /**
+   * Path patterns that expose ePHI (or strong identifiers linked to workforce
+   * health operations). Matched against the path only (no query string).
+   */
+  private static readonly PHI_READ_PATTERNS: RegExp[] = [
+    /\/nursing\/nurses(\/|$)/i, // list + /nurses/:id + /nurses/:id/credentials
+    /\/nursing\/credentials(\/|$)/i, // expiring credentials, etc.
+    /\/nursing\/roster(\/|$)/i, // roster list / filters
+  ];
 
   constructor(private auditService: AuditService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
     const { method, url, body, params, query, user, ip, headers } = request;
+    const path = (url || '').split('?')[0];
 
-    // Only audit mutating methods.
-    const shouldAudit = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    const isPhiRead = method === 'GET' && this.isPhiReadPath(path);
 
     // /auth/* is audited explicitly by AuthService (login success/failure,
-    // lockouts, RBAC denials); auditing it here too would double-log every
-    // attempt, including ones that must never carry a request body.
-    const isAuthRoute = /(^|\/)auth(\/|$)/.test(url.split('?')[0]);
+    // lockouts). Double-logging would include attempt bodies we must not store.
+    const isAuthRoute = /(^|\/)auth(\/|$)/i.test(path);
 
-    if (!shouldAudit || !user || isAuthRoute) {
+    // Lookups are reference data only — not PHI access.
+    const isLookup = /\/nursing\/lookups(\/|$)/i.test(path);
+
+    const shouldAudit =
+      !isAuthRoute && !isLookup && !!user && (isMutating || isPhiRead);
+
+    if (!shouldAudit) {
       return next.handle();
     }
 
     const startTime = Date.now();
+    const entityType = this.extractEntityType(path);
+    const entityId = this.extractEntityId(params, path);
 
     return next.handle().pipe(
       tap({
-        next: async (responseData) => {
+        next: async () => {
           const duration = Date.now() - startTime;
-          
-          // Determine entity type from URL
-          const entityType = this.extractEntityType(url);
-          const action = `${method}_${entityType}`.toUpperCase();
+          const action = isPhiRead
+            ? `VIEW_${entityType}`.toUpperCase()
+            : `${method}_${entityType}`.toUpperCase();
 
           try {
             await this.auditService.log({
-              userId: user.id,
+              userId: user.id ?? user.sub,
               username: user.username,
               action,
               entityType,
-              entityId: params?.id ? parseInt(params.id, 10) : undefined,
-              description: `${method} ${url} - ${duration}ms`,
-              changes: {
-                body: this.sanitizeBody(body),
-                params,
-                query,
-              },
+              entityId,
+              description: isPhiRead
+                ? `PHI read ${method} ${path} - ${duration}ms`
+                : `${method} ${path} - ${duration}ms`,
+              changes: isPhiRead
+                ? {
+                    // Metadata only — no response payload (would re-store PHI).
+                    accessType: 'READ',
+                    path,
+                    params: this.sanitizeParams(params),
+                    query: this.sanitizeQuery(query),
+                  }
+                : {
+                    body: this.sanitizeBody(body),
+                    params: this.sanitizeParams(params),
+                    query: this.sanitizeQuery(query),
+                  },
               ipAddress: ip,
-              userAgent: headers['user-agent'],
+              userAgent: headers?.['user-agent'],
+              sessionId: user.sessionId,
               status: 'Success',
             });
-          } catch (error) {
+          } catch (error: any) {
             this.logger.error(`Failed to write audit log: ${error.message}`, error.stack);
           }
         },
-        error: async (error) => {
+        error: async (error: any) => {
           const duration = Date.now() - startTime;
-          const entityType = this.extractEntityType(url);
-          
+          const action = isPhiRead
+            ? `FAILED_VIEW_${entityType}`.toUpperCase()
+            : `FAILED_${method}_${entityType}`.toUpperCase();
+
           try {
             await this.auditService.log({
-              userId: user?.id,
+              userId: user?.id ?? user?.sub,
               username: user?.username,
-              action: `FAILED_${method}_${entityType}`.toUpperCase(),
+              action,
               entityType,
-              description: `${method} ${url} failed - ${duration}ms - ${error.message}`,
+              entityId,
+              description: `${method} ${path} failed - ${duration}ms - ${error?.message || 'error'}`,
+              changes: isPhiRead
+                ? {
+                    accessType: 'READ',
+                    path,
+                    params: this.sanitizeParams(params),
+                    query: this.sanitizeQuery(query),
+                  }
+                : undefined,
               ipAddress: ip,
-              userAgent: headers['user-agent'],
+              userAgent: headers?.['user-agent'],
+              sessionId: user?.sessionId,
               status: 'Failure',
-              errorMessage: error.message,
+              errorMessage: error?.message,
             });
-          } catch (auditError) {
+          } catch (auditError: any) {
             this.logger.error(`Failed to write audit failure log: ${auditError.message}`);
           }
         },
@@ -91,28 +139,70 @@ export class AuditInterceptor implements NestInterceptor {
     );
   }
 
-  private extractEntityType(url: string): string {
-    // /api/v1/rbac/access-levels -> AccessLevel
-    // /api/v1/rbac/menus -> Menu
-    if (url.includes('access-levels')) return 'AccessLevel';
-    if (url.includes('menus')) return 'Menu';
-    if (url.includes('permissions')) return 'Permission';
-    if (url.includes('roles')) return 'Role';
-    if (url.includes('data-scopes')) return 'UserDataScope';
-    if (url.includes('users')) return 'User';
-    if (url.includes('auth')) return 'Auth';
+  private isPhiReadPath(path: string): boolean {
+    return AuditInterceptor.PHI_READ_PATTERNS.some((re) => re.test(path));
+  }
+
+  private extractEntityType(path: string): string {
+    const p = path.toLowerCase();
+
+    // Nursing / PHI
+    if (p.includes('/nursing/nurses') && p.includes('/credentials')) return 'NurseCredential';
+    if (p.includes('/nursing/nurses')) return 'Nurse';
+    if (p.includes('/nursing/credentials')) return 'Credential';
+    if (p.includes('/nursing/roster')) return 'RosterAssignment';
+
+    // RBAC / admin
+    if (p.includes('access-levels')) return 'AccessLevel';
+    if (p.includes('menus')) return 'Menu';
+    if (p.includes('permissions')) return 'Permission';
+    if (p.includes('data-scopes')) return 'UserDataScope';
+    if (p.includes('roles')) return 'Role';
+    if (p.includes('/users')) return 'User';
+    if (p.includes('/audit')) return 'AuditLog';
+    if (p.includes('auth')) return 'Auth';
+
     return 'Unknown';
   }
 
+  private extractEntityId(params: any, path: string): number | undefined {
+    if (params?.id != null && params.id !== '') {
+      const n = parseInt(String(params.id), 10);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    // /nursing/nurses/:id/credentials — id is the nurse
+    const m = path.match(/\/nursing\/nurses\/(\d+)/i);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+  }
+
   private sanitizeBody(body: any): any {
-    if (!body) return null;
+    if (!body || typeof body !== 'object') return null;
     const sanitized = { ...body };
-    // Never log passwords or tokens
     delete sanitized.password;
     delete sanitized.password_hash;
     delete sanitized.refreshToken;
     delete sanitized.accessToken;
     delete sanitized.token;
+    delete sanitized.currentPassword;
+    delete sanitized.newPassword;
     return sanitized;
+  }
+
+  private sanitizeParams(params: any): any {
+    if (!params || typeof params !== 'object') return undefined;
+    return { ...params };
+  }
+
+  private sanitizeQuery(query: any): any {
+    if (!query || typeof query !== 'object') return undefined;
+    // Keep filters (search, status, dates) for accountability; drop tokens if any.
+    const out = { ...query };
+    delete out.token;
+    delete out.accessToken;
+    return out;
   }
 }
