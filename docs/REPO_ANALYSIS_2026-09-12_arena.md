@@ -17,8 +17,12 @@
 >   `(id, created_at)` to match V3_6 partitioning (`8686c79`).
 > - **M-4** (bundle size) — route-level lazy loading + vendor chunks; entry
 >   bundle ~1.5 MB → ~17 KB (`008ded5`).
+> - **H-2b** (data scope on write paths) — least-privilege enforcement extended
+>   to create/update nurse & credential, roster CRUD + soft-deletes; `Post` and
+>   `Shift` scope types now enforced for roster (reads + writes); rule-based
+>   `Assigned` documented as the remaining TODO (fails closed).
 >
-> Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (42 passed / 5 skipped)
+> Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
 > `eslint` 0 errors ✅.
 
@@ -125,6 +129,13 @@ queries (`listNurses`, `listRoster`, credential lookups) do **not** filter by th
 user's org/department/unit scopes. This is the main remaining gap vs. the
 least-privilege goal implied by the `rbac.user_data_scopes` model. It's a known,
 documented limitation — but it's the biggest outstanding authorization surface.
+
+> ✅ **Resolved.** `V3_7__enforce_data_scope.sql` rewrites STEP 6 with
+> `rbac.user_in_data_scope()`, and `NursingService` enforces org/dept/unit scope
+> on reads **and** writes (create/update nurse & credential, roster CRUD,
+> soft-deletes). `Post`/`Shift` scopes are enforced for roster rows. Only the
+> rule-based `Assigned` scope remains (no assignment-rule engine yet; fails
+> closed).
 
 ### 🟡 M-1 — One Redis key, two incompatible payload shapes
 

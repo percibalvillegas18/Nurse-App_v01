@@ -125,7 +125,7 @@
 | Security Management Process (risk analysis) | 📋 | Formal risk analysis required; update when architecture changes |
 | Assigned Security Responsibility | 📋 | Designate a Security Officer |
 | Workforce Security (authorization, clearance, termination) | ⚠️ | User Management + role deactivation exist; formal off-boarding procedure needed |
-| Information Access Management | ✅ / ⚠️ | Strong RBAC; resource-aware data scope enforced for nurses/credentials/roster (V3_7 + NursingService); `Post`/`Shift`/`Assigned` scope types still TODO |
+| Information Access Management | ✅ / ⚠️ | Strong RBAC; resource-aware data scope enforced on reads AND writes (create/update nurse & credential, roster, soft-deletes) — org/dept/unit + `Post`/`Shift`; only rule-based `Assigned` remains TODO (needs an assignment-rule engine) |
 | Security Awareness & Training | 📋 | Required for all workforce with PHI access; retain records 6 years |
 | Security Incident Procedures | 📋 | Incident response plan + breach notification process required |
 | Contingency Plan (backup, disaster recovery, emergency mode) | ❌ / 🌐 | No documented backup/restore tested procedures yet |
@@ -164,7 +164,7 @@ These are primarily the responsibility of the hosting provider and facility:
 
 - **Strong unique user identification** and session binding
 - **Mature RBAC** with multi-role evaluation, deny-by-default, temporal validity
-- **Resource-aware data scopes** (org/dept/unit) enforced on nursing reads + roster writes (fail-closed)
+- **Resource-aware data scopes** (org/dept/unit + `Post`/`Shift`) enforced on nursing reads and writes — create/update nurse & credential, roster CRUD, soft-deletes (fail-closed)
 - **Audit trail** for mutations + authentication events + metadata-only PHI reads
 - **Tamper-evident audit log**: append-only triggers, RLS, SHA-256 hash chain + `verify_audit_chain()`
 - **Audit partitioning + retention**: monthly RANGE partitions + 6-year retention helper (V3_6)
@@ -189,7 +189,7 @@ These are primarily the responsibility of the hosting provider and facility:
 6. Idle session timeout (client + server).
 7. ~~Comprehensive audit of read access~~ ✅ — AuditInterceptor now logs PHI reads (`VIEW_*`, metadata only).
 8. ~~Audit log retention + partitioning + immutability~~ ✅ — V3_5/V3_6 (hash chain, triggers, monthly partitions, 6-year retention helper); wire the scheduled retention job in ops.
-9. ~~Resource-aware data-scope enforcement~~ ✅ for nurses/credentials/roster — V3_7 + NursingService; `Post`/`Shift`/`Assigned` scope types remain.
+9. ~~Resource-aware data-scope enforcement~~ ✅ on reads + writes — V3_7 + NursingService; org/dept/unit + `Post`/`Shift` implemented. Only rule-based `Assigned` remains (needs an assignment-rule engine; fails closed today).
 10. Break-glass / emergency access procedure with mandatory audit review.
 
 ### Medium
@@ -210,7 +210,7 @@ These are primarily the responsibility of the hosting provider and facility:
 [ ] Redis / Postgres connections use TLS in prod
 [ ] No shared accounts; every action attributable to a user_id
 [ ] Automatic idle logoff ≤ 15 minutes (configurable)
-[x] RBAC + data scopes enforce least privilege on nursing PHI APIs (Post/Shift/Assigned scopes TODO)
+[x] RBAC + data scopes enforce least privilege on nursing PHI APIs, reads and writes (org/dept/unit + Post/Shift; Assigned rule-engine TODO)
 [x] Audit logs capture who / what / when / where / outcome for PHI access (mutations + reads)
 [x] Audit logs immutable for application users + 6-year retention (triggers + hash chain + partitioning)
 [ ] Passwords never logged; PHI fields redacted from logs
