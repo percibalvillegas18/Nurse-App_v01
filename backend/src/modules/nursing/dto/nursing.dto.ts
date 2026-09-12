@@ -5,12 +5,21 @@ import {
   IsInt,
   IsDateString,
   IsIn,
+  Matches,
   MaxLength,
 } from 'class-validator';
+import { COUNTRIES } from '../countries';
 
 // ---------------------------------------------------------------------------
 // Nurses
 // ---------------------------------------------------------------------------
+
+/**
+ * Loose international phone sanity check: optional '+', then digits with
+ * spaces/dashes/dots/parentheses. Empty string is permitted (clients omit the
+ * field instead); this guards against obviously malformed values only.
+ */
+const PHONE_PATTERN = /^(\+?[0-9][0-9 \-().]{6,19})?$/;
 
 export const EMPLOYMENT_TYPES = ['FullTime', 'PartTime', 'PRN', 'Contract'] as const;
 export const NURSE_STATUSES = ['Active', 'OnLeave', 'Suspended', 'Terminated'] as const;
@@ -79,6 +88,7 @@ export class CreateNurseDto {
   date_of_birth?: string;
 
   @IsOptional()
+  @IsIn(COUNTRIES, { message: 'nationality must be one of the supported countries' })
   @IsString()
   @MaxLength(100)
   nationality?: string;
@@ -87,6 +97,9 @@ export class CreateNurseDto {
   // account (auth.users.email), not entered on the nurse record.
 
   @IsOptional()
+  @Matches(PHONE_PATTERN, {
+    message: 'phone must be a valid phone number (e.g. +966 50 123 4567)',
+  })
   @IsString()
   @MaxLength(50)
   phone?: string;
@@ -153,11 +166,15 @@ export class UpdateNurseDto {
   date_of_birth?: string;
 
   @IsOptional()
+  @IsIn(COUNTRIES, { message: 'nationality must be one of the supported countries' })
   @IsString()
   @MaxLength(100)
   nationality?: string;
 
   @IsOptional()
+  @Matches(PHONE_PATTERN, {
+    message: 'phone must be a valid phone number (e.g. +966 50 123 4567)',
+  })
   @IsString()
   @MaxLength(50)
   phone?: string;
