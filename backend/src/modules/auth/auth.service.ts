@@ -429,7 +429,11 @@ export class AuthService {
       remainingSeconds: status.remainingSeconds,
       lockScope: status.scope,
       backend: this.throttle.storageBackend,
+      // Field-name parity with the mock server so either backend can serve the
+      // same client. Both are permanently false: lockout is per-account/per-IP.
+      perUserAttempts: status.failedAttempts,
       isGlobal: false,
+      isGlobalLocked: false,
     };
   }
 
