@@ -85,12 +85,30 @@ linked account's email. Personal identifiers are only served by the
 scope-gated `getNurse()` detail endpoint. The Nurse Master UI now fetches the
 full record on edit before pre-filling the form.
 
+### 3.5 Phone format + nationality allow-list (was: free text)
+`phone` accepted any string ≤ 50 chars and `nationality` any string ≤ 100
+chars; the UI restricted the country selection but the API did not.
+
+**Fix:** both DTOs now validate server-side (the global `ValidationPipe`
+enforces them at the controller boundary):
+- `nationality` must be one of the supported `COUNTRIES` values — now a shared
+  module (`countries.ts`) so the DTO and `getLookups()` use the exact same
+  list the UI selector offers.
+- `phone` must match a loose international format (optional `+`, then digits
+  with spaces / dashes / dots / parentheses; empty string allowed).
+
+13 DTO unit tests cover both fields on create and update.
+
 ## 4. Noted, not changed (conscious scope decisions)
 
 - **`gender` is binary** (`Male` / `Female`) in the DB enum, DTO, and UI.
   Extending it requires a migration + seeds + frontend; flagged as a product
   decision.
-- **`phone` has no format validation** (free text ≤ 50 chars) and
-  **`nationality` is not server-enforced** against the country list (the
-  backend accepts any string ≤ 100 chars; the UI restricts selection). Kept
-  flexible on purpose; tighten if a strict format is required.
+- **Demo-data nationality mismatch (pre-existing).** The V3_1/V3_2 demo rows
+  were seeded with demonyms (`Filipino`, `American`, `South Korean`) that are
+  **not** in the validated `COUNTRIES` list (which uses country display names
+  such as `Philippines`, `United States`, `South Korea`; `Saudi` is the lone
+  demonym that matches). Those values remain stored but can no longer be
+  re-submitted — editing such a record in the UI requires re-selecting a
+  listed country. Normalizing the demo rows (or the list) is a small
+  follow-up.

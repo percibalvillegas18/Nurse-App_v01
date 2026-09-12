@@ -27,6 +27,9 @@
 >   UI, and `listNurses` slimmed to a minimum-necessary summary projection
 >   (personal identifiers now served only by the scope-gated detail endpoint).
 >   Full findings in `docs/EMPLOYEE_DATA_REVIEW.md`.
+> - **Employee data validation** — `nationality` is now server-enforced against
+>   the supported country list and `phone` against a loose international format
+>   (shared `countries.ts`, DTO decorators + 13 unit tests).
 >
 > Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
