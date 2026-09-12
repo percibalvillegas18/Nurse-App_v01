@@ -24,7 +24,8 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:studio": "prisma studio",
     "db:migrate:raw": "ts-node scripts/run-migrations.ts",
-    "db:seed:sql": "psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sql"
+    "db:seed:sql": "psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sql",
+    "alerts:scan": "ts-node scripts/run-contract-expiry-alerts.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
@@ -33,6 +34,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.3.0",
+    "@nestjs/schedule": "^4.0.0",
     "@prisma/client": "^5.12.0",
     "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",
@@ -70,19 +72,11 @@
     "typescript": "^5.3.3"
   },
   "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
+    "moduleFileExtensions": ["js", "json", "ts"],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
-    "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
-    },
-    "collectCoverageFrom": [
-      "**/*.(t|j)s"
-    ],
+    "transform": { "^.+\\.(t|j)s$": "ts-jest" },
+    "collectCoverageFrom": ["**/*.(t|j)s"],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   },
