@@ -16,11 +16,14 @@ const MAX_ATTEMPTS = 5;
 const LOCK_DURATION_MIN = 10;
 
 function getInitialValues() {
+  // Persist ONLY the username - never the password. The password field must
+  // always start empty (or with the static demo default below, which is
+  // public knowledge and shown on this page).
   try {
     const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (parsed.username) return parsed;
+      if (parsed.username) return { username: parsed.username };
     }
   } catch {}
   return DEFAULT_CREDENTIALS;
@@ -53,10 +56,11 @@ export const Login: React.FC = () => {
   });
   const [lockCountdown, setLockCountdown] = useState<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [lastAttempt, setLastAttempt] = useState<{ username: string; password: string } | null>(() => {
+  const [lastAttempt, setLastAttempt] = useState<{ username: string } | null>(() => {
     try {
       const saved = localStorage.getItem(LAST_ATTEMPT_KEY);
-      return saved ? JSON.parse(saved) : null;
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed?.username ? { username: parsed.username } : null;
     } catch {
       return null;
     }
@@ -77,8 +81,8 @@ export const Login: React.FC = () => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.username) {
-          form.setFieldsValue(parsed);
-          setLastAttempt(parsed);
+          form.setFieldsValue({ username: parsed.username });
+          setLastAttempt({ username: parsed.username });
         }
       }
     } catch {}
@@ -130,9 +134,10 @@ export const Login: React.FC = () => {
     };
   }, []);
 
-  const persistAttempt = (values: { username: string; password: string }) => {
+  const persistAttempt = (values: { username: string }) => {
     try {
-      localStorage.setItem(LAST_ATTEMPT_KEY, JSON.stringify(values));
+      // Username only - never write the password to storage.
+      localStorage.setItem(LAST_ATTEMPT_KEY, JSON.stringify({ username: values.username }));
     } catch {}
   };
 
@@ -147,7 +152,7 @@ export const Login: React.FC = () => {
   };
 
   const onValuesChange = (_changed: any, allValues: { username: string; password: string }) => {
-    persistAttempt(allValues);
+    persistAttempt({ username: allValues.username });
     if (_changed.username !== undefined) {
       form.setFields([{ name: 'username', errors: [] }]);
     }
@@ -171,9 +176,9 @@ export const Login: React.FC = () => {
       { name: 'username', errors: [] },
       { name: 'password', errors: [] },
     ]);
-    persistAttempt(values);
-    setLastAttempt({ ...values });
-    
+    persistAttempt({ username: values.username });
+    setLastAttempt({ username: values.username });
+
     try {
       await login(values.username, values.password);
       message.success(`Welcome ${values.username}!`);
@@ -264,8 +269,8 @@ export const Login: React.FC = () => {
       }
 
       form.setFieldsValue(values);
-      persistAttempt(values);
-      setLastAttempt({ ...values });
+      persistAttempt({ username: values.username });
+      setLastAttempt({ username: values.username });
     } finally {
       setLoading(false);
     }
@@ -282,8 +287,8 @@ export const Login: React.FC = () => {
       { name: 'username', errors: [] },
       { name: 'password', errors: [] },
     ]);
-    persistAttempt(newValues);
-    setLastAttempt(newValues);
+    persistAttempt({ username });
+    setLastAttempt({ username });
     setGenericError(null);
   };
 
@@ -302,7 +307,7 @@ export const Login: React.FC = () => {
       { name: 'username', errors: [] },
       { name: 'password', errors: [] },
     ]);
-    setLastAttempt(DEFAULT_CREDENTIALS);
+    setLastAttempt({ username: DEFAULT_CREDENTIALS.username });
     setAttemptInfo(null);
     setLockCountdown(0);
     if (countdownRef.current) clearInterval(countdownRef.current);

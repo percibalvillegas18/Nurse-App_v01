@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
 import { authApi } from '../api/client';
+import { tokenStore } from '../auth/tokenStore';
 
 interface AuthContextType {
   user: User | null;
@@ -30,10 +31,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   const checkAuth = async () => {
-    const token = localStorage.getItem('accessToken');
-    const storedUser = localStorage.getItem('user');
-
-    if (!token || !storedUser) {
+    // Tokens live in memory only (see tokenStore.ts), so a page reload drops
+    // the session. When a session is present, validate it against the backend.
+    if (!tokenStore.hasSession()) {
       setUser(null);
       setIsLoading(false);
       return;
@@ -45,11 +45,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const userData = response.data.data.user;
       setUser(userData);
     } catch (error) {
-      // Token invalid, clear storage
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      localStorage.removeItem('sessionId');
-      localStorage.removeItem('user');
+      // Token invalid, clear the in-memory session
+      tokenStore.clear();
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -71,10 +68,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error('Invalid response from server - missing user or token');
       }
 
-      localStorage.setItem('accessToken', tokens.accessToken);
-      localStorage.setItem('refreshToken', tokens.refreshToken);
-      localStorage.setItem('sessionId', tokens.sessionId);
-      localStorage.setItem('user', JSON.stringify(userData));
+      tokenStore.setSession({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        sessionId: tokens.sessionId,
+      });
 
       setUser(userData);
     } catch (error: any) {
@@ -90,10 +88,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     } catch (error) {
       console.error('Logout error', error);
     } finally {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      localStorage.removeItem('sessionId');
-      localStorage.removeItem('user');
+      tokenStore.clear();
       setUser(null);
     }
   };

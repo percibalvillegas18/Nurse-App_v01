@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { tokenStore } from '../auth/tokenStore';
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || '/api/v1';
 
@@ -13,12 +14,12 @@ export const apiClient = axios.create({
 // Request interceptor - add JWT
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('accessToken');
+    const token = tokenStore.getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
-    const sessionId = localStorage.getItem('sessionId');
+
+    const sessionId = tokenStore.getSessionId();
     if (sessionId) {
       config.headers['x-session-id'] = sessionId;
     }
@@ -53,7 +54,7 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
-      const refreshToken = localStorage.getItem('refreshToken');
+      const refreshToken = tokenStore.getRefreshToken();
       if (refreshToken) {
         try {
           const res = await axios.post(`${API_BASE}/auth/refresh-token`, {
@@ -61,16 +62,13 @@ apiClient.interceptors.response.use(
           });
 
           const { accessToken } = res.data.data;
-          localStorage.setItem('accessToken', accessToken);
+          tokenStore.setAccessToken(accessToken);
 
           originalRequest.headers.Authorization = `Bearer ${accessToken}`;
           return apiClient(originalRequest);
         } catch (refreshError) {
-          // Refresh failed - logout
-          localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
-          localStorage.removeItem('sessionId');
-          localStorage.removeItem('user');
+          // Refresh failed - clear the in-memory session
+          tokenStore.clear();
           // Only redirect if not already on login page
           if (window.location.pathname !== '/login') {
             window.location.href = '/login';
@@ -78,10 +76,7 @@ apiClient.interceptors.response.use(
           return Promise.reject(refreshError);
         }
       } else {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('sessionId');
-        localStorage.removeItem('user');
+        tokenStore.clear();
         // Only redirect if not already on login page to avoid wiping error message
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
