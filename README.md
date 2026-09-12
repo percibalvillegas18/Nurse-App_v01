@@ -99,6 +99,7 @@ psql $DATABASE_URL -f database/migrations/V3_4__nurse_job_no.sql
 psql $DATABASE_URL -f database/migrations/V3_5__tamper_proof_audit_logs.sql
 psql $DATABASE_URL -f database/migrations/V3_6__audit_log_partitioning.sql
 psql $DATABASE_URL -f database/migrations/V3_7__data_scope_resource_validation.sql
+psql $DATABASE_URL -f database/migrations/V3_8__contract_master.sql
 
 # Or use script (preferred - applies in order, tracks history, validates checksums)
 npx ts-node scripts/run-migrations.ts
@@ -177,6 +178,15 @@ HR/Compliance → `All`. These are exercised by the CI integration tests
 - Load testing
 
 ## Done Recently
+- ✅ Contract Master (Employment Contract Management): `V3_8` migration +
+  Nest `ContractsModule` (`/api/v1/contracts/*`). Single authoritative contract
+  record per nurse (agencies MOH/SOP/HCC/HHC, positions HN/AHN/CI/SN/PCT/TEC/
+  CN/HCA/MW, types FixedTerm/Permanent/Temporary/Other). Full lifecycle
+  Draft → PendingApproval → Active → Expired/Terminated/Renewed (submit/
+  approve/terminate/renew endpoints), renewal lineage (`renewed_from_contract_id`
+  + `renewal_count`), expiring/expired alert endpoints + workforce summary,
+  data-scope enforcement (CONTRACT_MASTER resolver), and roster deployment
+  gating via `nursing.nurse_has_active_contract()`.
 - ✅ User Management (Administration): real page replacing the TODO stub.
   Nest `UsersModule` (list/get/lookups + create/edit + deactivate/reactivate +
   admin-set password reset + per-user unlock + sessions & login history,

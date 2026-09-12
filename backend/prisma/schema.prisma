@@ -488,6 +488,7 @@ model nursing_nurses {
   employment_type String    @default("FullTime") @db.VarChar(50)
   primary_role_id BigInt?
   home_unit_id    BigInt?
+  position_id     BigInt?
   status          String    @default("Active") @db.VarChar(50)
   created_by      BigInt?
   created_at      DateTime  @default(now()) @db.Timestamp()
@@ -498,12 +499,15 @@ model nursing_nurses {
   user            auth_users? @relation("NurseUser", fields: [user_id], references: [id], onDelete: SetNull)
   primary_role    system_hospital_roles? @relation(fields: [primary_role_id], references: [id])
   home_unit       rbac_nursing_units? @relation(fields: [home_unit_id], references: [id])
+  position        nursing_positions? @relation(fields: [position_id], references: [id], onDelete: SetNull)
   credentials     nursing_credentials[]
   roster_assignments nursing_roster_assignments[]
+  contracts       nursing_contracts[]
 
   @@index([status])
   @@index([home_unit_id])
   @@index([primary_role_id])
+  @@index([position_id])
   @@map("nurses")
   @@schema("nursing")
 }
@@ -563,5 +567,90 @@ model nursing_roster_assignments {
   @@index([nursing_unit_id, assignment_date])
   @@index([status])
   @@map("roster_assignments")
+  @@schema("nursing")
+}
+
+model nursing_contract_agencies {
+  id          BigInt    @id @default(autoincrement())
+  code        String    @unique @db.VarChar(20)
+  name        String    @db.VarChar(100)
+  description String?   @db.Text
+  category    String    @default("ThirdParty") @db.VarChar(50)
+  status      String    @default("Active") @db.VarChar(50)
+  created_by  BigInt?
+  created_at  DateTime  @default(now()) @db.Timestamp()
+  updated_by  BigInt?
+  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamp()
+
+  contracts   nursing_contracts[]
+
+  @@map("contract_agencies")
+  @@schema("nursing")
+}
+
+model nursing_positions {
+  id          BigInt    @id @default(autoincrement())
+  code        String    @unique @db.VarChar(20)
+  name        String    @db.VarChar(100)
+  category    String    @default("Nursing") @db.VarChar(50)
+  description String?   @db.Text
+  status      String    @default("Active") @db.VarChar(50)
+  created_by  BigInt?
+  created_at  DateTime  @default(now()) @db.Timestamp()
+  updated_by  BigInt?
+  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamp()
+
+  nurses      nursing_nurses[]
+  contracts   nursing_contracts[]
+
+  @@map("positions")
+  @@schema("nursing")
+}
+
+model nursing_contracts {
+  id                       BigInt    @id @default(autoincrement())
+  contract_number          String    @unique @db.VarChar(50)
+  nurse_id                 BigInt
+  agency_id                BigInt
+  position_id              BigInt
+  nursing_unit_id          BigInt?
+  contract_type            String    @default("FixedTerm") @db.VarChar(50)
+  status                   String    @default("Draft") @db.VarChar(50)
+  start_date               DateTime  @db.Date
+  end_date                 DateTime? @db.Date
+  salary_amount            Decimal?  @db.Decimal(12, 2)
+  salary_currency          String?   @db.VarChar(10)
+  document_url             String?   @db.VarChar(500)
+  notes                    String?   @db.Text
+  submitted_by             BigInt?
+  submitted_at             DateTime? @db.Timestamp()
+  approved_by              BigInt?
+  approved_at              DateTime? @db.Timestamp()
+  approval_notes           String?   @db.Text
+  terminated_by            BigInt?
+  terminated_at            DateTime? @db.Timestamp()
+  termination_reason       String?   @db.VarChar(500)
+  renewed_from_contract_id BigInt?
+  renewal_count            Int       @default(0)
+  created_by               BigInt?
+  created_at               DateTime  @default(now()) @db.Timestamp()
+  updated_by               BigInt?
+  updated_at               DateTime  @default(now()) @updatedAt @db.Timestamp()
+  deleted_at               DateTime? @db.Timestamp()
+
+  nurse          nursing_nurses @relation(fields: [nurse_id], references: [id], onDelete: Restrict)
+  agency         nursing_contract_agencies @relation(fields: [agency_id], references: [id], onDelete: Restrict)
+  position       nursing_positions @relation(fields: [position_id], references: [id], onDelete: Restrict)
+  nursing_unit   rbac_nursing_units? @relation(fields: [nursing_unit_id], references: [id], onDelete: SetNull)
+  renewed_from   nursing_contracts? @relation("ContractRenewal", fields: [renewed_from_contract_id], references: [id], onDelete: SetNull)
+  renewals       nursing_contracts[] @relation("ContractRenewal")
+
+  @@index([nurse_id])
+  @@index([status])
+  @@index([end_date])
+  @@index([agency_id])
+  @@index([position_id])
+  @@index([nursing_unit_id])
+  @@map("contracts")
   @@schema("nursing")
 }

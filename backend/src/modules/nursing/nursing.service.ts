@@ -538,6 +538,13 @@ export class NursingService {
     await this.ensureNurseExists(dto.nurse_id);
     // Data scope: assignments may only be created for units the actor can see.
     await this.assertUnitInScope(actorId, dto.nursing_unit_id);
+    // Contract gating (Contract Master): a nurse may only be deployed on dates
+    // covered by an Active employment contract.
+    if (!(await this.nurseHasActiveContract(dto.nurse_id, new Date(dto.assignment_date)))) {
+      throw new ForbiddenException(
+        `Nurse #${dto.nurse_id} has no active contract covering ${dto.assignment_date}; deployment blocked`,
+      );
+    }
     try {
       const created = await this.prisma.nursing_roster_assignments.create({
         data: {
@@ -577,10 +584,21 @@ export class NursingService {
   }
 
   async updateRosterAssignment(id: number, dto: UpdateRosterAssignmentDto, actorId: number) {
-    await this.ensureRosterExists(id);
+    const existing = await this.ensureRosterExists(id);
     // Data scope: an assignment may only be moved into a unit the actor can see.
     if (dto.nursing_unit_id !== undefined) {
       await this.assertUnitInScope(actorId, dto.nursing_unit_id);
+    }
+    // Contract gating: re-validate the (possibly updated) nurse/date pair.
+    const nextNurseId = dto.nurse_id !== undefined ? dto.nurse_id : Number(existing.nurse_id);
+    const nextDate =
+      dto.assignment_date !== undefined
+        ? new Date(dto.assignment_date)
+        : new Date(existing.assignment_date);
+    if (!(await this.nurseHasActiveContract(nextNurseId, nextDate))) {
+      throw new ForbiddenException(
+        `Nurse #${nextNurseId} has no active contract covering ${this.toDateOnly(nextDate)}; deployment blocked`,
+      );
     }
     try {
       const updated = await this.prisma.nursing_roster_assignments.update({
@@ -715,6 +733,7 @@ export class NursingService {
   private async ensureRosterExists(id: number) {
     const row = await this.prisma.nursing_roster_assignments.findUnique({ where: { id } });
     if (!row || row.deleted_at) throw new NotFoundException(`Roster assignment #${id} not found`);
+    return row;
   }
 
   // ==========================================================================
@@ -754,6 +773,24 @@ export class NursingService {
     if (!visible.includes(Number(unitId))) {
       throw new ForbiddenException('Nursing unit is outside your data scope');
     }
+  }
+
+  /**
+   * Contract gating (Contract Master): whether the nurse has an Active
+   * employment contract covering the given date. Skipped in mock/preview mode
+   * and with the unit-test fake (no raw access), so existing tests stay green.
+   */
+  private async nurseHasActiveContract(nurseId: number, date: Date): Promise<boolean> {
+    if (this.isScopeCheckDisabled()) return true;
+    // Explicit casts: the SQL function is (BIGINT, DATE) and the driver may send
+    // the value as an int8/timestamp, so rely on ::bigint/::date rather than
+    // implicit casts (timestamp -> date is NOT implicit in Postgres).
+    const rows = (await this.prisma.$queryRawUnsafe(
+      `SELECT nursing.nurse_has_active_contract($1::bigint, $2::date) AS ok`,
+      nurseId,
+      this.toDateOnly(date),
+    )) as Array<{ ok: boolean }>;
+    return Boolean(rows?.[0]?.ok);
   }
 
   private async assertNurseInScope(userId?: number, nurseId?: number): Promise<void> {

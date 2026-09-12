@@ -7,6 +7,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { RbacModule } from './modules/rbac/rbac.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { NursingModule } from './modules/nursing/nursing.module';
+import { ContractsModule } from './modules/contracts/contracts.module';
 import { UsersModule } from './modules/users/users.module';
 import { RedisModule } from './modules/redis/redis.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
@@ -26,6 +27,7 @@ import { CacheController } from './cache.controller';
     RbacModule,
     AuditModule,
     NursingModule,
+    ContractsModule,
     UsersModule,
   ],
   controllers: [HealthController, CacheController],
