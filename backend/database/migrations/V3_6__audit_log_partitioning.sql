@@ -221,7 +221,7 @@ BEGIN
       AND c.relkind = 'r'
   LOOP
     -- bound_expr looks like: FOR VALUES FROM ('2024-01-01') TO ('2024-02-01')
-    v_to := substring(r.bound_expr from $$TO \('([0-9-]+)'\)$$)::date;
+    v_to := substring(r.bound_expr from 'TO \(''([0-9-]+)''\)')::date;
     IF v_to IS NOT NULL AND v_to <= v_cutoff THEN
       EXECUTE format('DROP TABLE IF EXISTS audit.%I', r.part_name);
       dropped_partition := 'audit.' || r.part_name;

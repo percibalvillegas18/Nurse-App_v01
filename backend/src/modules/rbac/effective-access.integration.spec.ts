@@ -95,7 +95,7 @@ maybe('EFFECTIVE ACCESS - INTEGRATION (real Postgres)', () => {
     await q(
       `INSERT INTO rbac.role_permissions
          (role_code, menu_id, permission_id, allowed, source, status, created_by, updated_by, effective_from, effective_to)
-       VALUES ('RN', $1, $2, TRUE, 'AccessLevelDefault', 'Active', 1, 1, CURRENT_TIMESTAMP - INTERVAL '1 day', CURRENT_TIMESTAMP + INTERVAL '1 day')
+       VALUES ('RN', $1, $2, TRUE, 'AccessLevelDefault', 'Active', 1, 1, CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP + INTERVAL '1 day')
        ON CONFLICT (role_code, menu_id, permission_id)
        DO UPDATE SET allowed = TRUE, status = 'Active',
          effective_from = EXCLUDED.effective_from, effective_to = EXCLUDED.effective_to`,
@@ -107,7 +107,7 @@ maybe('EFFECTIVE ACCESS - INTEGRATION (real Postgres)', () => {
       q(
         `INSERT INTO rbac.role_menu_access
            (role_code, menu_id, visible, enabled, assignment_source, status, created_by, updated_by, effective_from, effective_to)
-         VALUES ('RN', $1, TRUE, TRUE, 'AccessLevelDefault', 'Active', 1, 1, CURRENT_TIMESTAMP - INTERVAL '1 day', $2::timestamp)
+         VALUES ('RN', $1, TRUE, TRUE, 'AccessLevelDefault', 'Active', 1, 1, CURRENT_TIMESTAMP - INTERVAL '2 days', $2::timestamp)
          ON CONFLICT (role_code, menu_id)
          DO UPDATE SET visible = TRUE, enabled = TRUE, status = 'Active',
            effective_from = EXCLUDED.effective_from, effective_to = EXCLUDED.effective_to`,
