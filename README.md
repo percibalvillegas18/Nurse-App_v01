@@ -39,7 +39,9 @@ Nurse-App_v01/
 │   │   ├── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
 │   │   ├── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
 │   │   ├── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
-│   │   └── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
+│   │   ├── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
+│   │   ├── V3_3__drop_nurse_email.sql            # Email comes from the linked user account
+│   │   └── V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
 │   ├── scripts/run-migrations.ts
 │   ├── Dockerfile
 │   ├── package.json
@@ -90,6 +92,8 @@ psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sq
 psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
 psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
 psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
+psql $DATABASE_URL -f database/migrations/V3_3__drop_nurse_email.sql
+psql $DATABASE_URL -f database/migrations/V3_4__nurse_job_no.sql
 
 # Or use script
 npx ts-node scripts/run-migrations.ts

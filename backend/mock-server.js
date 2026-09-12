@@ -1389,10 +1389,10 @@ const COUNTRIES = [
 ];
 
 const mockNurses = [
-  { id: 1, employeeNumber: 'EMP-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 2, employeeNumber: 'EMP-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 3, employeeNumber: 'EMP-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: 4, employeeNumber: 'EMP-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 1, employeeNumber: 'EMP-1001', jobNo: 'JOB-1001', firstName: 'Maria', middleName: 'Josefa', lastName: 'Garcia', gender: 'Female', dateOfBirth: '1990-04-12', nationality: 'Filipino', phone: '+966-50-111-2233', hireDate: '2019-03-01', employmentType: 'FullTime', status: 'Active', userId: 4, username: 'maria.garcia', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 2, employeeNumber: 'EMP-1002', jobNo: 'JOB-1002', firstName: 'Ahmed', middleName: null, lastName: 'Hassan', gender: 'Male', dateOfBirth: '1988-11-03', nationality: 'Saudi', phone: '+966-50-222-3344', hireDate: '2020-06-15', employmentType: 'FullTime', status: 'Active', userId: 5, username: 'ahmed.hassan', primaryRole: { id: 1, code: 'RN', name: 'Registered Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 3, employeeNumber: 'EMP-1003', jobNo: 'JOB-1003', firstName: 'Jennifer', middleName: 'Anne', lastName: 'Smith', gender: 'Female', dateOfBirth: '1993-07-22', nationality: 'American', phone: '+966-50-333-4455', hireDate: '2021-09-01', employmentType: 'PartTime', status: 'Active', userId: 6, username: 'jennifer.smith', primaryRole: { id: 2, code: 'LPN', name: 'Licensed Practical Nurse' }, homeUnit: mockUnits[0], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: 4, employeeNumber: 'EMP-1004', jobNo: 'JOB-1004', firstName: 'David', middleName: null, lastName: 'Kim', gender: 'Male', dateOfBirth: '1991-02-14', nationality: 'South Korean', phone: '+966-50-444-5566', hireDate: '2022-01-10', employmentType: 'FullTime', status: 'Active', userId: 7, username: 'david.kim', primaryRole: { id: 3, code: 'CNA', name: 'Certified Nursing Assistant' }, homeUnit: mockUnits[1], _deleted: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ];
 
 const mockCredentials = [
@@ -1452,7 +1452,7 @@ function mockUserEmail(userId) {
 }
 function mapMockNurse(n) {
   return {
-    id: n.id, employeeNumber: n.employeeNumber, firstName: n.firstName,
+    id: n.id, employeeNumber: n.employeeNumber, jobNo: n.jobNo || null, firstName: n.firstName,
     middleName: n.middleName || null, lastName: n.lastName,
     // Full Name = First + Middle + Last (middle omitted when not set)
     fullName: [n.firstName, n.middleName, n.lastName].filter(Boolean).join(' '),
@@ -1502,8 +1502,10 @@ app.get('/api/v1/nursing/nurses', (req, res) => {
     rows = rows.filter(
       (n) =>
         n.firstName.toLowerCase().includes(q) ||
+        String(n.middleName || '').toLowerCase().includes(q) ||
         n.lastName.toLowerCase().includes(q) ||
-        n.employeeNumber.toLowerCase().includes(q),
+        n.employeeNumber.toLowerCase().includes(q) ||
+        String(n.jobNo || '').toLowerCase().includes(q),
     );
   }
   const total = rows.length;
@@ -1556,6 +1558,17 @@ app.post('/api/v1/nursing/nurses', (req, res) => {
   if (!b.first_name || !b.last_name) {
     return res.status(400).json({ success: false, message: 'first_name, last_name are required', timestamp: new Date().toISOString() });
   }
+  // Job No. is typed by the user, required, and unique across all nurses
+  const newJobNo = String(b.job_no || '').trim();
+  if (!newJobNo) {
+    return res.status(400).json({ success: false, message: 'job_no is required', timestamp: new Date().toISOString() });
+  }
+  if (newJobNo.length > 50) {
+    return res.status(400).json({ success: false, message: 'job_no must be at most 50 characters', timestamp: new Date().toISOString() });
+  }
+  if (mockNurses.some((n) => String(n.jobNo || '').toLowerCase() === newJobNo.toLowerCase())) {
+    return res.status(409).json({ success: false, message: 'Job No. "' + newJobNo + '" is already used by another nurse', timestamp: new Date().toISOString() });
+  }
   // Employee number auto-generated when omitted (personal-info form does not enter it)
   if (!b.employee_number) {
     const year = new Date().getFullYear();
@@ -1577,6 +1590,7 @@ app.post('/api/v1/nursing/nurses', (req, res) => {
   const created = {
     id: nextNurseId++,
     employeeNumber: b.employee_number,
+    jobNo: newJobNo,
     firstName: b.first_name,
     middleName: b.middle_name || null,
     lastName: b.last_name,
@@ -1607,6 +1621,19 @@ app.patch('/api/v1/nursing/nurses/:id', (req, res) => {
   const b = req.body || {};
   if (b.employee_number && mockNurses.some((n) => n.id !== nurse.id && n.employeeNumber === b.employee_number)) {
     return res.status(409).json({ success: false, message: 'Employee number "' + b.employee_number + '" already exists', timestamp: new Date().toISOString() });
+  }
+  if (b.job_no !== undefined) {
+    const nextJobNo = String(b.job_no || '').trim();
+    if (!nextJobNo) {
+      return res.status(400).json({ success: false, message: 'job_no must not be empty', timestamp: new Date().toISOString() });
+    }
+    if (nextJobNo.length > 50) {
+      return res.status(400).json({ success: false, message: 'job_no must be at most 50 characters', timestamp: new Date().toISOString() });
+    }
+    if (mockNurses.some((n) => n.id !== nurse.id && String(n.jobNo || '').toLowerCase() === nextJobNo.toLowerCase())) {
+      return res.status(409).json({ success: false, message: 'Job No. "' + nextJobNo + '" is already used by another nurse', timestamp: new Date().toISOString() });
+    }
+    nurse.jobNo = nextJobNo;
   }
   if (b.employee_number !== undefined) nurse.employeeNumber = b.employee_number;
   if (b.first_name !== undefined) nurse.firstName = b.first_name;

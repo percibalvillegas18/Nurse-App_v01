@@ -198,6 +198,8 @@ export type RosterStatus =
 
 export interface Nurse {
   id: number;
+  /** Manually entered, unique per nurse (distinct from the auto-generated employeeNumber) */
+  jobNo: string;
   employeeNumber: string;
   firstName: string;
   middleName: string | null;

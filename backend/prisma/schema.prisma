@@ -478,6 +478,9 @@ model audit_audit_logs {
 model nursing_nurses {
   id              BigInt    @id @default(autoincrement())
   employee_number String    @unique @db.VarChar(50)
+  /// Manually-entered job number (HR/establishment no.); unique per nurse and
+  /// distinct from the auto-generated employee_number.
+  job_no          String    @unique @db.VarChar(50)
   user_id         BigInt?   @unique
   first_name      String    @db.VarChar(100)
   middle_name     String?   @db.VarChar(100)

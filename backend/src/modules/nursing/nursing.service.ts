@@ -84,6 +84,7 @@ export class NursingService {
         { middle_name: { contains: q, mode: 'insensitive' } },
         { last_name: { contains: q, mode: 'insensitive' } },
         { employee_number: { contains: q, mode: 'insensitive' } },
+        { job_no: { contains: q, mode: 'insensitive' } },
       ];
     }
 
@@ -167,10 +168,13 @@ export class NursingService {
     if (!dto.employee_number) {
       dto.employee_number = await this.generateEmployeeNumber();
     }
+    // Job No. is typed by the user, so normalise it before the uniqueness check.
+    const jobNo = dto.job_no.trim();
     try {
       const created = await this.prisma.nursing_nurses.create({
         data: {
           employee_number: dto.employee_number,
+          job_no: jobNo,
           user_id: dto.user_id ?? null,
           first_name: dto.first_name,
           middle_name: dto.middle_name ?? null,
@@ -207,6 +211,7 @@ export class NursingService {
       return { nurse: this.mapNurseRow(created) };
     } catch (error: any) {
       this.throwIfUniqueViolation(error, {
+        job_no: `Job No. "${jobNo}" is already used by another nurse`,
         employee_number: `Employee number "${dto.employee_number}" already exists`,
         user_id: 'That login account is already linked to another nurse record',
       });
@@ -220,6 +225,7 @@ export class NursingService {
       const updated = await this.prisma.nursing_nurses.update({
         where: { id },
         data: {
+          ...(dto.job_no !== undefined && { job_no: dto.job_no.trim() }),
           ...(dto.employee_number !== undefined && { employee_number: dto.employee_number }),
           ...(dto.user_id !== undefined && { user_id: dto.user_id }),
           ...(dto.first_name !== undefined && { first_name: dto.first_name }),
@@ -261,6 +267,7 @@ export class NursingService {
       return { nurse: this.mapNurseRow(updated) };
     } catch (error: any) {
       this.throwIfUniqueViolation(error, {
+        job_no: `Job No. "${(dto.job_no || '').trim()}" is already used by another nurse`,
         employee_number: `Employee number "${dto.employee_number}" already exists`,
         user_id: 'That login account is already linked to another nurse record',
       });
@@ -703,6 +710,7 @@ export class NursingService {
     return {
       id: Number(r.id),
       employeeNumber: r.employee_number,
+      jobNo: r.job_no ?? null,
       firstName: r.first_name,
       middleName: r.middle_name ?? null,
       lastName: r.last_name,

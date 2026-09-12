@@ -42,6 +42,15 @@ export class CreateNurseDto {
   @MaxLength(50)
   employee_number?: string;
 
+  /**
+   * Job No. - manually entered, required, unique per nurse.
+   * Distinct from employee_number, which this form auto-generates.
+   */
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  job_no: string;
+
   @IsOptional()
   @IsInt()
   user_id?: number;
@@ -101,6 +110,13 @@ export class CreateNurseDto {
 }
 
 export class UpdateNurseDto {
+  /** Job No. - optional on update, but never blank when provided. */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  job_no?: string;
+
   @IsOptional()
   @IsString()
   @IsNotEmpty()

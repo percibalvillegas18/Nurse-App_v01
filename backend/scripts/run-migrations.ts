@@ -39,6 +39,7 @@ const order = [
   'V3_1__seed_nursing_demo.sql',
   'V3_2__nurse_personal_fields.sql',
   'V3_3__drop_nurse_email.sql',
+  'V3_4__nurse_job_no.sql',
 ];
 
 interface Flags {

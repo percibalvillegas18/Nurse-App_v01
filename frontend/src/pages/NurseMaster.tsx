@@ -89,6 +89,7 @@ export const NurseMaster: React.FC = () => {
   const openEdit = (nurse: Nurse) => {
     setEditing(nurse);
     form.setFieldsValue({
+      jobNo: nurse.jobNo,
       firstName: nurse.firstName,
       middleName: nurse.middleName,
       lastName: nurse.lastName,
@@ -105,6 +106,7 @@ export const NurseMaster: React.FC = () => {
   const submit = async () => {
     const values = await form.validateFields();
     const payload: any = {
+      job_no: values.jobNo,
       first_name: values.firstName,
       middle_name: values.middleName || undefined,
       last_name: values.lastName,
@@ -169,7 +171,18 @@ export const NurseMaster: React.FC = () => {
   ];
 
   const columns = [
-    { title: 'Emp #', dataIndex: 'employeeNumber', key: 'emp', width: 100 },
+    {
+      title: 'Job No. / Emp #',
+      dataIndex: 'jobNo',
+      key: 'jobno',
+      width: 128,
+      render: (jobNo: string, nurse: Nurse) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{jobNo ?? '—'}</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>{nurse.employeeNumber}</Text>
+        </Space>
+      ),
+    },
     {
       title: 'Name',
       dataIndex: 'fullName',
@@ -269,7 +282,7 @@ export const NurseMaster: React.FC = () => {
         <Title level={4}>Nurse Master</Title>
         <Space>
           <Input.Search
-            placeholder="Search name or employee #"
+            placeholder="Search name, job no. or employee #"
             prefix={<SearchOutlined />}
             style={{ width: 240 }}
             allowClear
@@ -371,6 +384,19 @@ export const NurseMaster: React.FC = () => {
             />
           </Form.Item>
 
+          <Form.Item
+            name="jobNo"
+            label="Job No."
+            rules={[
+              { required: true, message: 'Required' },
+              { max: 50, message: 'Maximum 50 characters' },
+              { whitespace: true, message: 'Job No. cannot be blank' },
+            ]}
+            extra="Unique per nurse - entered here, unlike the auto-generated Employee #."
+          >
+            <Input placeholder="e.g. JOB-1001" />
+          </Form.Item>
+
           <Row gutter={12}>
             <Col span={8}>
               <Form.Item name="gender" label="Gender" rules={[{ required: true, message: 'Required' }]}>
@@ -427,8 +453,8 @@ export const NurseMaster: React.FC = () => {
             style={{ marginBottom: 0 }}
             message={
               editing
-                ? `Employee #: ${editing.employeeNumber}${editing.email ? ' • Email (from user account): ' + editing.email : ''}`
-                : 'Employee # is auto-generated on save; the email address comes from the user account. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
+                ? `Job No.: ${editing.jobNo ?? '—'} • Employee #: ${editing.employeeNumber}${editing.email ? ' • Email (from user account): ' + editing.email : ''}`
+                : 'Employee # is auto-generated on save; Job No. is the one identifier you type, and it must be unique. The email address comes from the user account. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
             }
           />
         </Form>
@@ -445,6 +471,7 @@ export const NurseMaster: React.FC = () => {
         {viewedNurse && (
           <>
             <Descriptions column={2} size="small" bordered style={{ marginBottom: 24 }}>
+              <Descriptions.Item label="Job No.">{viewedNurse.jobNo ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Employee #">{viewedNurse.employeeNumber}</Descriptions.Item>
               <Descriptions.Item label="Status">
                 <Tag color={viewedNurse.status === 'Active' ? 'green' : 'orange'}>{viewedNurse.status}</Tag>

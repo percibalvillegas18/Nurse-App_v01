@@ -31,7 +31,7 @@ class FakePrisma {
         const q = where.OR[0].first_name.contains.toLowerCase();
         rows = rows.filter(
           (n) =>
-            [n.first_name, n.middle_name, n.last_name, n.employee_number]
+            [n.first_name, n.middle_name, n.last_name, n.employee_number, n.job_no]
               .filter(Boolean)
               .some((v: string) => v.toLowerCase().includes(q)),
         );
@@ -76,6 +76,9 @@ class FakePrisma {
       if (this.nurses.some((n) => n.employee_number === data.employee_number)) {
         throw { code: 'P2002', meta: { target: ['employee_number'] } };
       }
+      if (this.nurses.some((n) => n.job_no === data.job_no)) {
+        throw { code: 'P2002', meta: { target: ['job_no'] } };
+      }
       if (data.user_id && this.nurses.some((n) => n.user_id === data.user_id)) {
         throw { code: 'P2002', meta: { target: ['user_id'] } };
       }
@@ -104,6 +107,12 @@ class FakePrisma {
         this.nurses.some((n) => n.id !== where.id && n.employee_number === data.employee_number)
       ) {
         throw { code: 'P2002', meta: { target: ['employee_number'] } };
+      }
+      if (
+        data.job_no &&
+        this.nurses.some((n) => n.id !== where.id && n.job_no === data.job_no)
+      ) {
+        throw { code: 'P2002', meta: { target: ['job_no'] } };
       }
       this.nurses[idx] = { ...this.nurses[idx], ...data, updated_at: new Date() };
       return {
@@ -228,6 +237,7 @@ describe('NURSING SERVICE', () => {
 
   const baseNurse = {
     employee_number: 'EMP-1001',
+    job_no: 'JOB-1001',
     first_name: 'Maria',
     last_name: 'Garcia',
     hire_date: new Date('2019-03-01'),
@@ -261,7 +271,7 @@ describe('NURSING SERVICE', () => {
 
     it('auto-generates employee_number when omitted (personal-info form)', async () => {
       const { nurse } = await service.createNurse(
-        { first_name: 'Sara', last_name: 'Ali', gender: 'Female', date_of_birth: '1995-01-01', nationality: 'Saudi' } as any,
+        { job_no: 'JOB-2002', first_name: 'Sara', last_name: 'Ali', gender: 'Female', date_of_birth: '1995-01-01', nationality: 'Saudi' } as any,
         1,
       );
       expect(nurse.employeeNumber).toMatch(/^EMP-\d{4}-(\d{5}|\d+)$/);
@@ -274,7 +284,7 @@ describe('NURSING SERVICE', () => {
 
     it('computes fullName from first + middle + last', async () => {
       const { nurse } = await service.createNurse(
-        { ...baseNurse, employee_number: 'EMP-3001', user_id: undefined, middle_name: 'Josefa', hire_date: undefined } as any,
+        { ...baseNurse, employee_number: 'EMP-3001', job_no: 'JOB-3003', user_id: undefined, middle_name: 'Josefa', hire_date: undefined } as any,
         1,
       );
       expect(nurse.fullName).toBe('Maria Josefa Garcia');
@@ -291,14 +301,23 @@ describe('NURSING SERVICE', () => {
 
     it('rejects duplicate employee_number with 409 ConflictException', async () => {
       await expect(
-        service.createNurse({ ...baseNurse, hire_date: '2019-03-01', user_id: 99 } as any, 1),
+        service.createNurse({ ...baseNurse, job_no: 'JOB-4004', hire_date: '2019-03-01', user_id: 99 } as any, 1),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects duplicate user link with 409', async () => {
       await expect(
         service.createNurse(
-          { ...baseNurse, employee_number: 'EMP-1002', hire_date: '2019-03-01' } as any,
+          { ...baseNurse, employee_number: 'EMP-1002', job_no: 'JOB-5005', hire_date: '2019-03-01' } as any,
+          1,
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('rejects duplicate job_no with 409 ConflictException', async () => {
+      await expect(
+        service.createNurse(
+          { ...baseNurse, employee_number: 'EMP-7007', job_no: 'JOB-1001', user_id: undefined } as any,
           1,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -342,6 +361,7 @@ describe('NURSING SERVICE', () => {
         {
           ...baseNurse,
           employee_number: 'EMP-2001',
+          job_no: 'JOB-6006',
           user_id: undefined,
           hire_date: '2020-01-01',
         } as any,
