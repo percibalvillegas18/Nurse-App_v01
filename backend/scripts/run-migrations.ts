@@ -7,16 +7,6 @@
  *   ts-node scripts/run-migrations.ts --baseline       # record all as applied without running
  *   ts-node scripts/run-migrations.ts --force          # re-run everything, ignoring history
  *   ts-node scripts/run-migrations.ts --continue-on-error   # old lenient behaviour
- *
- * Why this changed: the previous version logged `❌ <file> failed` and then
- * continued to the next migration, exiting 0. A database left half-migrated was
- * therefore reported as "🎉 All migrations completed", and a missing migration
- * file was silently skipped - both let a broken schema reach production with a
- * green build.
- *
- * Now any failure (or missing file) aborts with a non-zero exit code, and each
- * applied migration is recorded in `schema_migrations` so re-runs are cheap and
- * an edited-after-apply file is detected.
  */
 
 import * as fs from 'fs';
@@ -40,6 +30,7 @@ const order = [
   'V3_2__nurse_personal_fields.sql',
   'V3_3__drop_nurse_email.sql',
   'V3_4__nurse_job_no.sql',
+  'V3_5__tamper_proof_audit_logs.sql',
 ];
 
 interface Flags {
@@ -81,7 +72,6 @@ async function run() {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     if (flags.dryRun) {
-      // No database needed to list the planned order.
       console.log('ℹ️  DATABASE_URL not set - dry-run shows the configured order only:');
       order.forEach((f, i) => console.log(`  ${String(i + 1).padStart(2, ' ')}. ${f}`));
       return;
@@ -103,8 +93,6 @@ async function run() {
     rows.map((r) => [r.filename, { checksum: r.checksum, status: r.status }]),
   );
 
-  // Fail up-front if a migration the ordering expects is not on disk - the old
-  // runner skipped those with a warning and left the schema incomplete.
   const missing = order.filter((f) => !fs.existsSync(path.join(migrationsDir, f)));
   if (missing.length > 0) {
     console.error(`❌ Missing migration file(s): ${missing.join(', ')}`);
@@ -174,9 +162,6 @@ async function run() {
     console.log(`\n▶️  Running ${file}...`);
     const startedAt = Date.now();
     try {
-      // One transaction per file: PostgreSQL supports transactional DDL, so a
-      // failure rolls back cleanly and the migration can simply be retried
-      // instead of leaving half-created objects behind.
       await client.query('BEGIN');
       await client.query(sql);
       const duration = Date.now() - startedAt;
@@ -203,12 +188,9 @@ async function run() {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Nothing was open (e.g. the failure happened in BEGIN itself).
+        // ignore
       }
 
-      // The file's changes were rolled back, so no history row is written and
-      // the next run retries it. Abort the sequence: later migrations build on
-      // this one.
       failures.push(file);
       if (!flags.continueOnError) {
         console.error(
