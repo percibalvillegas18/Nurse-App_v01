@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { AuthModule } from './modules/auth/auth.module';
@@ -20,6 +21,7 @@ import { CacheController } from './cache.controller';
       isGlobal: true,
       envFilePath: ['.env.local', '.env.development', '.env'],
     }),
+    ScheduleModule.forRoot(),
     PrismaModule,
     RedisModule,
     AuthModule,
