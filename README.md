@@ -43,7 +43,10 @@ Nurse-App_v01/
 │   │   ── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
 │   │   ── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
 │   │   ── V3_3__drop_nurse_email.sql            # Email comes from the linked user account
-│   │   └─ V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
+│   │   ── V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
+│   │   ── V3_5__tamper_proof_audit_logs.sql     # Hash-chain + immutable audit trail
+│   │   ── V3_6__audit_log_partitioning.sql      # Monthly partitioning + 6y retention
+│   │   └─ V3_7__enforce_data_scope.sql          # Resource-specific data-scope validation
 │   ── scripts/run-migrations.ts
 │   ── Dockerfile
 │   ── package.json
@@ -61,7 +64,10 @@ Nurse-App_v01/
 ## Quick Start (Docker)
 
 ```bash
-# Start all services
+# Start all services. The backend applies the checked-in SQL migrations via the
+# checksummed runner (scripts/run-migrations.ts) before starting - there is no
+# separate postgres init-scripts path, so a fresh volume and a re-run use the
+# same single source of truth.
 docker-compose up -d
 
 # Check logs
@@ -82,23 +88,11 @@ cp .env.example .env.development
 # Start only DBs
 docker-compose up -d postgres redis
 
-# Run migrations
+# Apply migrations (single source of truth - checksummed + transactional,
+# recorded in public.schema_migrations). Run from backend/:
 export DATABASE_URL=postgresql://devuser:devpassword@localhost:5432/hospital_rbac_dev
-psql $DATABASE_URL -f database/migrations/V1_0__initial_schema.sql
-psql $DATABASE_URL -f database/migrations/V1_1__system_tables.sql
-psql $DATABASE_URL -f database/migrations/V2_1__role_model_redesign.sql
-psql $DATABASE_URL -f database/migrations/V2_2__rbac_tables_role_updates.sql
-psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sql
-psql $DATABASE_URL -f database/migrations/V2_4__seed_rbac_configuration.sql
-psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sql
-psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
-psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
-psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
-psql $DATABASE_URL -f database/migrations/V3_3__drop_nurse_email.sql
-psql $DATABASE_URL -f database/migrations/V3_4__nurse_job_no.sql
-
-# Or use script
-npx ts-node scripts/run-migrations.ts
+npm run db:migrate:raw            # apply pending migrations
+npm run db:migrate:raw -- --dry-run   # preview what would run
 
 # Prisma
 npx prisma generate
