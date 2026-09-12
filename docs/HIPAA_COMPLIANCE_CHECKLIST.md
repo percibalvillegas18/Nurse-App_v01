@@ -37,7 +37,7 @@
 |---------|-------------|----------------|----------------|----------|
 | Unique user identification | Every person has a unique ID; no shared accounts | ✅ | `auth.users` with unique username/email; sessions bound to user_id | High |
 | Emergency access (“break-glass”) | Documented procedure to access PHI when normal access fails | ❌ | No break-glass role or audited override path | High |
-| Automatic logoff | Session timeout after inactivity | ⚠️ | JWT expiry 1 h + absolute session timeout 24 h exist; **no idle/inactivity timeout** on client or server | High |
+| Automatic logoff | Session timeout after inactivity | ✅ | Server-side idle window (`SESSION_IDLE_TIMEOUT`, default 15 min) enforced by JwtStrategy + refresh, plus frontend idle detector with auto-logout; sliding expiry (1 h) + absolute cap (24 h) also enforced | High |
 | Encryption & decryption | Mechanism to encrypt/decrypt ePHI | ⚠️ | Passwords bcrypt-12; JWT secrets required; **no field-level or TDE encryption of PHI columns** | Critical |
 | Role-based / least privilege | Access limited to minimum necessary | ✅ | Full RBAC with multi-role `evaluate_access`, menu + permission matrix, data scopes | High |
 | MFA | Multi-factor authentication for PHI access | ❌ | Password-only today | Critical |
@@ -49,7 +49,7 @@
 
 **Recommended next steps**
 1. Add TOTP / WebAuthn MFA (start with optional, then mandatory for SYSTEM_ADMIN / HR / Compliance roles).
-2. Implement client-side idle detection (15 min default) that triggers logout + server-side session invalidation.
+2. ~~Implement client-side idle detection (15 min default) that triggers logout + server-side session invalidation.~~ ✅ — done: `JwtStrategy` idle/expiry/absolute enforcement + `SessionIdleGuard` frontend auto-logout.
 3. Add documented break-glass role with mandatory post-use review + audit flag.
 4. Enable PostgreSQL Transparent Data Encryption (or volume encryption) + evaluate column-level encryption for high-sensitivity fields (DOB, nationality, credentials).
 
@@ -186,7 +186,7 @@ These are primarily the responsibility of the hosting provider and facility:
 5. Formal **risk analysis** and designation of Security Officer.
 
 ### High
-6. Idle session timeout (client + server).
+6. ~~Idle session timeout (client + server).~~ ✅ — done.
 7. ~~Comprehensive audit of read access~~ ✅ — AuditInterceptor now logs PHI reads (`VIEW_*`, metadata only).
 8. ~~Audit log retention + partitioning + immutability~~ ✅ — V3_5/V3_6 (hash chain, triggers, monthly partitions, 6-year retention helper); wire the scheduled retention job in ops.
 9. ~~Resource-aware data-scope enforcement~~ ✅ on reads + writes — V3_7 + NursingService; org/dept/unit + `Post`/`Shift` implemented. Only rule-based `Assigned` remains (needs an assignment-rule engine; fails closed today).
@@ -209,12 +209,12 @@ These are primarily the responsibility of the hosting provider and facility:
 [ ] Database + backups encrypted at rest (AES-256)
 [ ] Redis / Postgres connections use TLS in prod
 [ ] No shared accounts; every action attributable to a user_id
-[ ] Automatic idle logoff ≤ 15 minutes (configurable)
+[x] Automatic idle logoff ≤ 15 minutes (configurable) — server + client
 [x] RBAC + data scopes enforce least privilege on nursing PHI APIs, reads and writes (org/dept/unit + Post/Shift; Assigned rule-engine TODO)
 [x] Audit logs capture who / what / when / where / outcome for PHI access (mutations + reads)
 [x] Audit logs immutable for application users + 6-year retention (triggers + hash chain + partitioning)
 [ ] Passwords never logged; PHI fields redacted from logs
-[ ] Session revocation works on logout and admin unlock
+[x] Session revocation works on logout (admin session-revoke UI remains a follow-up)
 [ ] Account lockout after repeated failures
 [ ] Secrets managed via env / secret manager (never committed)
 [ ] BAAs signed with hosting, DB, logging, monitoring vendors
@@ -233,7 +233,7 @@ These are primarily the responsibility of the hosting provider and facility:
 | Authentication | `auth.service.ts`, `login-throttle.service.ts`, JWT strategy |
 | Audit | `audit.interceptor.ts`, `audit.service.ts`, RLS + immutability triggers + hash chain (V3_5), partitioning (V3_6) |
 | Password security | bcrypt rounds = 12, lockout counters |
-| Session management | `auth_sessions` table, absolute timeout, revocation |
+| Session management | `auth_sessions` table, idle + sliding + absolute time windows, revocation on logout |
 | Data model (PHI candidates) | Nursing domain tables (V3_*), personal fields, job_no |
 
 ---
@@ -241,7 +241,7 @@ These are primarily the responsibility of the hosting provider and facility:
 ## 10. Next Concrete Code / Config Tasks
 
 1. Add MFA module (TOTP) behind feature flag.
-2. Add idle-timeout middleware + frontend idle detector.
+2. ~~Add idle-timeout middleware + frontend idle detector.~~ ✅ — done.
 3. ~~Expand `AuditInterceptor` to sensitive GET endpoints~~ ✅ — done (PHI read logging).
 4. ~~Add migration for audit_log partitioning~~ ✅ — V3_6; **remaining:** schedule the retention/partition-ahead job (cron / pg_cron).
 5. Production Docker / K8s manifests that force TLS and encrypted volumes.

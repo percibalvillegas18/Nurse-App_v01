@@ -33,6 +33,10 @@
 > - **Demo nationality normalization** — `V3_8` rewrites legacy demonym values
 >   (`Filipino`/`American`/`South Korean`) to country display names so seeded
 >   records pass the new validation; mock-server demo rows updated.
+> - **Idle session timeout** — server-side idle/expiry/absolute session windows
+>   enforced by `JwtStrategy` + refresh (previously `SESSION_TIMEOUT`/
+>   `SESSION_ABSOLUTE_TIMEOUT` were dead config and refresh minted tokens
+>   forever), plus a frontend `SessionIdleGuard` auto-logout.
 >
 > Verified: backend `tsc --noEmit` ✅, `jest` 3/3 suites (51 passed / 5 skipped)
 > ✅, `nest build` ✅, `eslint` 0 errors ✅; frontend `tsc` + `vite build` ✅,
