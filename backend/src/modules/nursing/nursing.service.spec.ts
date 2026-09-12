@@ -3,7 +3,7 @@
  * Covers: list filters/pagination, credential summary, unique-conflict mapping
  * (P2002 -> 409), double-booking prevention, 404s, soft deletes.
  */
-import { ConflictException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { ConflictException, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { NursingService } from './nursing.service';
 
 const DAY = 86400000;
@@ -29,6 +29,14 @@ class FakePrisma {
   shifts = [
     { id: 1, code: 'MORNING', name: 'Morning Shift', start_time: '07:00', end_time: '15:00' },
     { id: 2, code: 'EVENING', name: 'Evening Shift', start_time: '15:00', end_time: '23:00' },
+  ];
+  roles = [
+    { id: 1, code: 'REGISTERED_NURSE', name: 'Registered Nurse', category: 'Clinical' },
+    { id: 2, code: 'CHARGE_NURSE', name: 'Charge Nurse', category: 'Clinical' },
+  ];
+  users = [
+    { id: 4, username: 'maria.garcia', email: 'maria.garcia@hospital.local', status: 'Active' },
+    { id: 99, username: 'other.user', email: 'other.user@hospital.local', status: 'Active' },
   ];
 
   nursing_nurses = {
@@ -253,7 +261,13 @@ class FakePrisma {
     },
   };
 
-  system_hospital_roles = { findMany: async () => [] };
+  system_hospital_roles = {
+    findMany: async () => this.roles,
+    findUnique: async ({ where }: any) => this.roles.find((r) => r.id === where.id) || null,
+  };
+  auth_users = {
+    findUnique: async ({ where }: any) => this.users.find((u) => u.id === where.id) || null,
+  };
   rbac_nursing_units = {
     findMany: async ({ where }: any) => {
       let rows = this.units;
@@ -529,6 +543,62 @@ describe('NURSING SERVICE', () => {
       );
       expect(list.items.find((a: any) => a.id === 2)).toBeUndefined();
       expect(list.items.find((a: any) => a.id === 1)).toBeDefined();
+    });
+  });
+
+  describe('Employee field validation', () => {
+    it('rejects a bogus primary_role_id with 400', async () => {
+      await expect(
+        service.createNurse(
+          { ...baseNurse, employee_number: 'EMP-VAL1', job_no: 'JOB-VAL1', primary_role_id: 999 } as any,
+          1,
+          1,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.updateNurse(2, { primary_role_id: 999 } as any, 1, 1),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a bogus user_id link with 400', async () => {
+      await expect(
+        service.createNurse(
+          { ...baseNurse, employee_number: 'EMP-VAL2', job_no: 'JOB-VAL2', user_id: 555 } as any,
+          1,
+          1,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a future date of birth with 400', async () => {
+      await expect(
+        service.createNurse(
+          {
+            ...baseNurse,
+            employee_number: 'EMP-VAL3',
+            job_no: 'JOB-VAL3',
+            date_of_birth: '2099-01-01',
+          } as any,
+          1,
+          1,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a date of birth after the hire date with 400', async () => {
+      await expect(
+        service.createNurse(
+          {
+            ...baseNurse,
+            employee_number: 'EMP-VAL4',
+            job_no: 'JOB-VAL4',
+            date_of_birth: '1995-01-01',
+            hire_date: '1990-01-01',
+          } as any,
+          1,
+          1,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

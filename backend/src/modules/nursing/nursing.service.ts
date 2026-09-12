@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../auth/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -531,6 +532,12 @@ export class NursingService {
       await this.assertUnitInScope(userId, Number(dto.home_unit_id));
     }
 
+    // Referential integrity + data-quality checks (fail 400 instead of a raw
+    // FK violation or silently accepting nonsense).
+    if (dto.primary_role_id != null) await this.ensureRoleExists(Number(dto.primary_role_id));
+    if (dto.user_id != null) await this.ensureUserAccountExists(Number(dto.user_id));
+    this.assertValidDates(dto.date_of_birth, dto.hire_date);
+
     try {
       const created = await this.prisma.nursing_nurses.create({
         data: {
@@ -586,6 +593,14 @@ export class NursingService {
     if (dto.home_unit_id !== undefined && dto.home_unit_id !== null) {
       await this.assertUnitInScope(userId, Number(dto.home_unit_id));
     }
+    // Referential integrity + data-quality checks.
+    if (dto.primary_role_id !== undefined && dto.primary_role_id !== null) {
+      await this.ensureRoleExists(Number(dto.primary_role_id));
+    }
+    if (dto.user_id !== undefined && dto.user_id !== null) {
+      await this.ensureUserAccountExists(Number(dto.user_id));
+    }
+    this.assertValidDates(dto.date_of_birth, dto.hire_date);
     try {
       const updated = await this.prisma.nursing_nurses.update({
         where: { id },
@@ -1058,6 +1073,38 @@ export class NursingService {
   private async ensureNurseExists(id: number) {
     const row = await this.prisma.nursing_nurses.findUnique({ where: { id } });
     if (!row || row.deleted_at) throw new NotFoundException(`Nurse #${id} not found`);
+  }
+
+  /** Reject a bogus primary_role_id with 400 instead of a raw FK violation. */
+  private async ensureRoleExists(roleId: number): Promise<void> {
+    const role = await this.prisma.system_hospital_roles.findUnique({ where: { id: roleId } });
+    if (!role) throw new BadRequestException(`Hospital role #${roleId} not found`);
+  }
+
+  /** Reject a bogus user_id link with 400 instead of a raw FK violation. */
+  private async ensureUserAccountExists(userId: number): Promise<void> {
+    const user = await this.prisma.auth_users.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException(`User account #${userId} not found`);
+  }
+
+  /**
+   * Data-quality guards on employee dates: date of birth cannot be in the
+   * future, and cannot be after the hire date (when both are present).
+   */
+  private assertValidDates(dateOfBirth?: string | null, hireDate?: string | null): void {
+    const now = Date.now();
+    if (dateOfBirth) {
+      const dob = new Date(dateOfBirth).getTime();
+      if (Number.isNaN(dob)) throw new BadRequestException('Invalid date of birth');
+      if (dob > now) throw new BadRequestException('Date of birth cannot be in the future');
+    }
+    if (dateOfBirth && hireDate) {
+      const dob = new Date(dateOfBirth).getTime();
+      const hire = new Date(hireDate).getTime();
+      if (!Number.isNaN(dob) && !Number.isNaN(hire) && dob > hire) {
+        throw new BadRequestException('Date of birth cannot be after the hire date');
+      }
+    }
   }
 
   /** The nurse a credential belongs to, preserving 404 semantics on the credential. */
