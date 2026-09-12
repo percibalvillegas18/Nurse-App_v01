@@ -1,16 +1,36 @@
-# Mock Server Improvements Guide
+# Mock Server Improvements — Find & Replace Guide
 
-All 8 recommendations with exact code patches for `backend/mock-server.js`.
+Apply all 5 patches to `backend/mock-server.js` using your text editor's **Find & Replace** (`Ctrl+H` on Windows, `Cmd+H` on Mac, or use VS Code).
 
-**Already applied (in `package.json`):**
-- ✅ `express` + `cors` added to devDependencies
-- ✅ `npm run mock` and `npm run mock:watch` scripts added
+**Already done (no action needed):**
+- ✅ `express` + `cors` in `devDependencies` (`package.json`)
+- ✅ `npm run mock` + `npm run mock:watch` scripts (`package.json`)
 
 ---
 
-## Patch 1 — Request logging (add right after `app.use(express.json())`)
+## How to apply each patch
 
-```js
+For each patch below:
+1. Open `backend/mock-server.js` in VS Code (or any editor)
+2. Press `Ctrl+H` (Windows) or `Cmd+Option+F` (Mac) to open Find & Replace
+3. Copy the **FIND** block exactly into the search box
+4. Copy the **REPLACE** block exactly into the replace box
+5. Click **Replace** (not Replace All — there is only one match per patch)
+6. Save the file
+
+---
+
+## Patch 1 — Request logger
+
+**FIND** (this exact line):
+```
+app.use(express.json());
+```
+
+**REPLACE WITH:**
+```
+app.use(express.json());
+
 // ── DEV: Request logger ──────────────────────────────────────────────────────
 app.use((req, res, next) => {
   const start = Date.now();
@@ -24,15 +44,19 @@ app.use((req, res, next) => {
 
 ---
 
-## Patch 2 — Auth middleware for protected routes (add after Patch 1)
+## Patch 2 — Auth middleware for protected routes
 
-Track issued access tokens alongside refresh tokens. In the login handler, also push to `issuedAccessTokens`.
+**FIND:**
+```
+const issuedRefreshTokens = new Map(); // token -> userId
+```
 
-```js
-// ── DEV: Valid access tokens (populated on login) ────────────────────────────
-const issuedAccessTokens = new Map(); // token -> userId
+**REPLACE WITH:**
+```
+const issuedRefreshTokens = new Map(); // token -> userId
+const issuedAccessTokens = new Map();  // token -> userId (populated on login)
 
-// Middleware: require a valid Bearer token on all protected routes
+// ── DEV: Auth middleware — require a valid Bearer token on protected routes ──
 function requireMockAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '').trim();
   if (!token || !issuedAccessTokens.has(token)) {
@@ -46,8 +70,6 @@ function requireMockAuth(req, res, next) {
   req.mockUserId = issuedAccessTokens.get(token);
   next();
 }
-
-// Apply to all non-auth protected namespaces
 app.use('/api/v1/users', requireMockAuth);
 app.use('/api/v1/nursing', requireMockAuth);
 app.use('/api/v1/rbac', requireMockAuth);
@@ -55,28 +77,86 @@ app.use('/api/v1/audit', requireMockAuth);
 app.use('/api/v1/cache', requireMockAuth);
 ```
 
-Then in the login success handler, add:
-```js
-issuedAccessTokens.set(accessToken, user.id);
+Then find the login success block and add one line.
+
+**FIND:**
+```
+  issuedRefreshTokens.set(mockRefreshToken, user.id);
 ```
 
-And in the logout handler, delete it:
-```js
-issuedAccessTokens.delete(token);
+**REPLACE WITH:**
+```
+  issuedRefreshTokens.set(mockRefreshToken, user.id);
+  issuedAccessTokens.set(mockToken, user.id);
+```
+
+Then update the logout handler.
+
+**FIND:**
+```
+  if (userId !== null) {
+    for (const [token, uid] of issuedRefreshTokens) {
+      if (uid === userId) issuedRefreshTokens.delete(token);
+    }
+  }
+```
+
+**REPLACE WITH:**
+```
+  if (userId !== null) {
+    for (const [token, uid] of issuedRefreshTokens) {
+      if (uid === userId) issuedRefreshTokens.delete(token);
+    }
+    for (const [token, uid] of issuedAccessTokens) {
+      if (uid === userId) issuedAccessTokens.delete(token);
+    }
+  }
 ```
 
 ---
 
-## Patch 3 — Replace global lockout with per-user only
+## Patch 3 — Per-user lockout only (remove global lockout)
 
-Replace the `isLocked` function and `globalAttempts` usage with per-user only:
+**FIND** (the entire line):
+```
+let globalAttempts = { count: 0, lockedUntil: null, lastAttemptAt: null }; // GLOBAL counter - same for username+password errors
+```
 
-```js
-// ── PER-USER lockout (no global — dev-friendly) ──────────────────────────────
-// Removed: globalAttempts. Each username has its own counter.
-// This prevents one typo from locking out your entire dev session.
+**REPLACE WITH** (keep `globalAttempts` so existing references don't break, but make it inert):
+```
+// Global lockout removed — per-user only (dev-friendly: one typo won't lock everyone out)
+// globalAttempts kept as a no-op stub so existing references compile without errors
+let globalAttempts = { count: 0, lockedUntil: null, lastAttemptAt: null };
+```
 
+Then replace `isLocked`:
+
+**FIND:**
+```
 function isLocked(username) {
+  // Check global lock first - if global locked, all users locked
+  if (globalAttempts.lockedUntil && Date.now() < globalAttempts.lockedUntil) {
+    return true;
+  }
+  if (globalAttempts.lockedUntil && Date.now() >= globalAttempts.lockedUntil) {
+    globalAttempts.count = 0;
+    globalAttempts.lockedUntil = null;
+  }
+  // Also check per-user lock
+  const record = loginAttempts[username];
+  if (!record || !record.lockedUntil) return false;
+  if (Date.now() < record.lockedUntil) return true;
+  // Lock expired, reset
+  record.count = 0;
+  record.lockedUntil = null;
+  return false;
+}
+```
+
+**REPLACE WITH:**
+```
+function isLocked(username) {
+  // Per-user lock only — no global lockout in dev mode
   const record = loginAttempts[username];
   if (!record || !record.lockedUntil) return false;
   if (Date.now() < record.lockedUntil) return true;
@@ -85,8 +165,28 @@ function isLocked(username) {
   record.lockedUntil = null;
   return false;
 }
+```
 
+Then replace `getRemainingLockTime`:
+
+**FIND:**
+```
 function getRemainingLockTime(username) {
+  // Global lock takes precedence
+  if (globalAttempts.lockedUntil) {
+    const remaining = globalAttempts.lockedUntil - Date.now();
+    if (remaining > 0) return remaining;
+  }
+  const record = loginAttempts[username];
+  if (!record || !record.lockedUntil) return 0;
+  return Math.max(0, record.lockedUntil - Date.now());
+}
+```
+
+**REPLACE WITH:**
+```
+function getRemainingLockTime(username) {
+  // Per-user lock only
   const record = loginAttempts[username];
   if (!record || !record.lockedUntil) return 0;
   return Math.max(0, record.lockedUntil - Date.now());
@@ -95,40 +195,54 @@ function getRemainingLockTime(username) {
 
 ---
 
-## Patch 4 — Strip `validUsernames` and `Demo: Password123!` from error responses
+## Patch 4 — Strip `validUsernames` list from error responses
 
-Find the login handler and replace these two error messages:
-
-**USER_NOT_FOUND response — remove `validUsernames` from details:**
-```js
-// BEFORE
-details: {
-  validUsernames: Object.keys(mockUsers),
-  // ...
-}
-
-// AFTER
-details: {
-  failedAttempts: record.count,
-  remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
-  // validUsernames removed
-}
+**FIND** (inside the USER_NOT_FOUND response):
+```
+        enteredUsername: trimmedUsername,
+        validUsernames: Object.keys(mockUsers),
+        failedAttempts: globalAttempts.count,
+        perUserAttempts: record.count,
+        remainingAttempts: 0,
 ```
 
-**INVALID_PASSWORD response — remove the `Demo:` hint:**
-```js
-// BEFORE
-message: `Invalid password for "${user.username}". Demo: Password123!`
+**REPLACE WITH:**
+```
+        enteredUsername: trimmedUsername,
+        failedAttempts: record.count,
+        remainingAttempts: 0,
+```
 
-// AFTER
-message: `Invalid credentials.`
+Then find the second USER_NOT_FOUND response (the non-locked one):
+
+**FIND:**
+```
+        enteredUsername: trimmedUsername,
+        validUsernames: Object.keys(mockUsers),
+        failedAttempts: globalAttempts.count, // GLOBAL as requested
+        perUserAttempts: record.count,
+        remainingAttempts: Math.max(0, MAX_ATTEMPTS - globalAttempts.count),
+```
+
+**REPLACE WITH:**
+```
+        enteredUsername: trimmedUsername,
+        failedAttempts: record.count,
+        remainingAttempts: Math.max(0, MAX_ATTEMPTS - record.count),
 ```
 
 ---
 
-## Patch 5 — Dev utility endpoints (add before the catch-all)
+## Patch 5 — Dev utility endpoints
 
-```js
+**FIND** (near the bottom of the file):
+```
+// Catch all
+app.use((req, res) => {
+```
+
+**REPLACE WITH:**
+```
 // ── DEV: Mock introspection endpoints ────────────────────────────────────────
 
 // List all registered routes
@@ -150,9 +264,9 @@ app.get('/api/v1/mock/state', (req, res) => {
     data: {
       users: Object.keys(mockUsers).length,
       activeSessions: issuedRefreshTokens.size,
-      nurses: mockNurses.filter((n) => !n._deleted).length,
-      credentials: mockCredentials.length,
-      rosterAssignments: mockRoster.filter((r) => r.status !== 'Cancelled').length,
+      nurses: typeof mockNurses !== 'undefined' ? mockNurses.filter((n) => !n._deleted).length : 'n/a',
+      credentials: typeof mockCredentials !== 'undefined' ? mockCredentials.length : 'n/a',
+      rosterAssignments: typeof mockRoster !== 'undefined' ? mockRoster.filter((r) => r.status !== 'Cancelled').length : 'n/a',
       loginAttempts: Object.entries(loginAttempts).reduce((acc, [user, rec]) => {
         if (rec.count > 0) acc[user] = { count: rec.count, locked: !!rec.lockedUntil };
         return acc;
@@ -162,24 +276,41 @@ app.get('/api/v1/mock/state', (req, res) => {
   });
 });
 
-// Reset all login counters (dev convenience)
+// Reset all login counters
 app.post('/api/v1/mock/reset', (req, res) => {
   Object.keys(loginAttempts).forEach((k) => { loginAttempts[k] = { count: 0, lockedUntil: null }; });
-  globalAttempts = { count: 0, lockedUntil: null, lastAttemptAt: null };
-  res.json({ success: true, message: 'All counters reset', timestamp: new Date().toISOString() });
+  globalAttempts.count = 0;
+  globalAttempts.lockedUntil = null;
+  res.json({ success: true, message: 'All login counters reset', timestamp: new Date().toISOString() });
 });
+
+// Catch all
+app.use((req, res) => {
 ```
 
 ---
 
-## Summary — Apply order
+## Test after saving
 
-| # | File | Status |
+Restart the mock server (`npm run mock`) then verify:
+
+| URL | Expected result |
+|---|---|
+| `GET http://localhost:4000/api/v1/mock/routes` | JSON list of all routes |
+| `GET http://localhost:4000/api/v1/mock/state` | Data counts snapshot |
+| `POST http://localhost:4000/api/v1/mock/reset` | `{ success: true, message: "All login counters reset" }` |
+| Login with wrong username 5 times | Only that username is locked, others still work |
+
+---
+
+## Status summary
+
+| Patch | What it does | Status |
 |---|---|---|
-| `express`/`cors` in devDependencies | `package.json` | ✅ Done |
-| `npm run mock` + `mock:watch` | `package.json` | ✅ Done |
-| Patch 1 — request logging | `mock-server.js` | Apply manually |
-| Patch 2 — auth middleware | `mock-server.js` | Apply manually |
-| Patch 3 — per-user lockout | `mock-server.js` | Apply manually |
-| Patch 4 — strip credential hints | `mock-server.js` | Apply manually |
-| Patch 5 — `/mock/routes`, `/mock/state`, `/mock/reset` | `mock-server.js` | Apply manually |
+| `package.json` deps | `express` + `cors` available after `npm install` | ✅ Done |
+| `package.json` scripts | `npm run mock` starts the server | ✅ Done |
+| Patch 1 | Logs every request with method, path, status, ms | Apply |
+| Patch 2 | Blocks 46 unguarded routes unless logged in | Apply |
+| Patch 3 | One user's typos can't lock out everyone | Apply |
+| Patch 4 | Error messages no longer leak the full user list | Apply |
+| Patch 5 | `/mock/routes`, `/mock/state`, `/mock/reset` endpoints | Apply |
