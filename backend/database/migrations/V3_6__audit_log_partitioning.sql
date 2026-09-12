@@ -55,11 +55,16 @@ BEGIN
   ALTER INDEX IF EXISTS audit.idx_audit_logs_entry_hash RENAME TO idx_audit_logs_legacy_entry_hash;
   ALTER INDEX IF EXISTS audit.idx_audit_logs_id_desc RENAME TO idx_audit_logs_legacy_id_desc;
 
+  -- The legacy PRIMARY KEY index is also still named `audit_logs_pkey`; the new
+  -- parent would try to reuse that name for its own PK index and fail. Rename it
+  -- out of the way first.
+  ALTER INDEX IF EXISTS audit.audit_logs_pkey RENAME TO audit_logs_legacy_pkey;
+
   -- --------------------------------------------------------------------------
   -- 3. Create partitioned parent (same columns as V1_0 + V3_5)
   -- --------------------------------------------------------------------------
   CREATE TABLE audit.audit_logs (
-    id            BIGSERIAL,
+    id            BIGINT NOT NULL,
     user_id       BIGINT,
     username      VARCHAR(100),
     action        VARCHAR(100) NOT NULL,
@@ -80,6 +85,13 @@ BEGIN
     entry_hash    TEXT NOT NULL,
     PRIMARY KEY (id, created_at)
   ) PARTITION BY RANGE (created_at);
+
+  -- Reuse the original sequence rather than creating a new one. `id BIGSERIAL`
+  -- would execute an implicit CREATE SEQUENCE for `audit.audit_logs_id_seq`,
+  -- which already exists and is owned by the legacy table's id column - the
+  -- CREATE TABLE would fail with "relation already exists". Point the parent's
+  -- default at that sequence so old and new rows keep a single global id space.
+  ALTER TABLE audit.audit_logs ALTER COLUMN id SET DEFAULT nextval('audit.audit_logs_id_seq');
 
   -- Keep sequence in sync with legacy max(id) so new ids do not collide
   PERFORM setval(

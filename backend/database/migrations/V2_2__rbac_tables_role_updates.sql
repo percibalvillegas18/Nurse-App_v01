@@ -32,6 +32,15 @@ UPDATE rbac.role_permissions SET role_code =
   END
 WHERE role_code IS NULL;
 
+-- The V1 model keyed these tables on `role_id` (VARCHAR). The redesign keys them
+-- on `role_code` (FK -> system.hospital_roles). `role_id` is NOT NULL with no
+-- default, so every role_code-only insert (the V2_4 seed does exactly that)
+-- violated the not-null constraint and the migration chain failed here. Once
+-- role_code is populated, drop the legacy column; this also removes the old
+-- `uk_role_menu_access (role_id, menu_id)` / `uk_role_permissions` constraints.
+ALTER TABLE rbac.role_menu_access DROP COLUMN IF EXISTS role_id;
+ALTER TABLE rbac.role_permissions DROP COLUMN IF EXISTS role_id;
+
 -- Add FK constraints (only after hospital_roles seeded, so deferrable)
 -- We'll add them as NOT VALID initially, then validate later after seed
 ALTER TABLE rbac.role_menu_access DROP CONSTRAINT IF EXISTS fk_role_menu_access_hospital_roles;
