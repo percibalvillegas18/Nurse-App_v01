@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Body,
+  Param,
   Req,
   UseGuards,
   Get,
@@ -12,6 +13,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { LoginDto, RefreshTokenDto } from './dto/login.dto';
 import { Request } from 'express';
+import { RbacGuard } from '../../common/guards/rbac.guard';
+import { CanEdit, CanView } from '../../common/decorators/require-permission.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -22,6 +25,8 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     const ip = req.ip || req.headers['x-forwarded-for'] as string;
     const userAgent = req.headers['user-agent'];
+    // validateUser receives the IP so unknown-username attempts can be
+    // throttled per client instead of on a shared counter.
     const result = await this.authService.login(dto.username, dto.password, ip, userAgent);
     
     return {
@@ -38,7 +43,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: any) {
     const userId = req.user.id;
-    const sessionId = req.headers['x-session-id'] || req.body?.sessionId;
+    // Prefer the session bound to the presented token: a client-supplied
+    // x-session-id could otherwise revoke some *other* session (or none).
+    const sessionId =
+      req.user?.sessionId || req.headers['x-session-id'] || req.body?.sessionId;
     const result = await this.authService.logout(userId, sessionId);
     
     return {
@@ -77,124 +85,67 @@ export class AuthController {
     };
   }
 
+  /**
+   * Lockout status for one account.
+   *
+   * Was anonymous, which let anyone probe which accounts were mid-lockout and
+   * how many attempts they had left. Now requires USER_MANAGEMENT/VIEW.
+   */
   @Get('attempts/:username')
-  async getAttempts(@Req() req: any) {
-    const username = req.params.username;
-    try {
-      // Get global attempts
-      const global = (this.authService as any).getGlobalAttempts ? (this.authService as any).getGlobalAttempts() : { count: 0, lockedUntil: null, remainingSeconds: 0 };
-      const user = await (this.authService as any).prisma.auth_users.findFirst({
-        where: { OR: [{ username }, { email: username }] },
-      });
-      const isGlobalLocked = global.lockedUntil && new Date(global.lockedUntil) > new Date();
-      if (!user) {
-        return {
-          success: true,
-          data: { 
-            username, 
-            failedAttempts: global.count, // GLOBAL same counter
-            perUserAttempts: 0,
-            remainingAttempts: Math.max(0, 5 - global.count), 
-            maxAttempts: 5, 
-            isLocked: isGlobalLocked,
-            isGlobalLocked,
-            lockedUntil: global.lockedUntil,
-            remainingSeconds: global.remainingSeconds,
-            isGlobal: true,
-          },
-          timestamp: new Date().toISOString(),
-        };
-      }
-      const isPerUserLocked = user.locked_until && new Date(user.locked_until) > new Date();
-      const isLocked = isGlobalLocked || isPerUserLocked;
-      const remainingMs = isLocked ? Math.max(
-        global.lockedUntil ? new Date(global.lockedUntil).getTime() - Date.now() : 0,
-        user.locked_until ? new Date(user.locked_until).getTime() - Date.now() : 0
-      ) : 0;
-      return {
-        success: true,
-        data: {
-          username,
-          failedAttempts: global.count, // GLOBAL same for username+password
-          perUserAttempts: user.failed_login_attempts || 0,
-          remainingAttempts: Math.max(0, 5 - global.count),
-          maxAttempts: 5,
-          isLocked,
-          isGlobalLocked,
-          lockedUntil: global.lockedUntil || user.locked_until,
-          remainingSeconds: Math.ceil(remainingMs / 1000),
-          isGlobal: true,
-        },
-        timestamp: new Date().toISOString(),
-      };
-    } catch {
-      return {
-        success: true,
-        data: { username, failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false, isGlobal: true },
-        timestamp: new Date().toISOString(),
-      };
-    }
+  @UseGuards(AuthGuard('jwt'), RbacGuard)
+  @CanView('USER_MANAGEMENT')
+  async getAttempts(@Param('username') username: string) {
+    const data = await this.authService.getAttemptStatus(username);
+    return { success: true, data, timestamp: new Date().toISOString() };
   }
 
+  /** Throttle policy + counters overview (admin only). */
   @Get('attempts')
-  async getGlobalAttempts() {
-    try {
-      const global = (this.authService as any).getGlobalAttempts ? (this.authService as any).getGlobalAttempts() : { count: 0, lockedUntil: null, remainingSeconds: 0 };
-      return {
-        success: true,
-        data: {
-          failedAttempts: global.count,
-          remainingAttempts: Math.max(0, 5 - global.count),
-          maxAttempts: 5,
-          isLocked: !!global.lockedUntil && new Date(global.lockedUntil) > new Date(),
-          lockedUntil: global.lockedUntil,
-          remainingSeconds: global.remainingSeconds,
-          isGlobal: true,
-          message: 'GLOBAL counter - username+password share same count',
-        },
-        timestamp: new Date().toISOString(),
-      };
-    } catch {
-      return {
-        success: true,
-        data: { failedAttempts: 0, remainingAttempts: 5, maxAttempts: 5, isLocked: false, isGlobal: true },
-        timestamp: new Date().toISOString(),
-      };
-    }
-  }
-
-  @Post('reset-attempts')
-  async resetAttempts(@Body() body: { username?: string }) {
-    const username = body?.username;
-    try {
-      // Reset global
-      if ((this.authService as any).resetGlobalAttempts) {
-        (this.authService as any).resetGlobalAttempts();
-      }
-      if (username) {
-        const user = await (this.authService as any).prisma.auth_users.findFirst({
-          where: { OR: [{ username }, { email: username }] },
-        });
-        if (user) {
-          await (this.authService as any).prisma.auth_users.update({
-            where: { id: user.id },
-            data: { failed_login_attempts: 0, locked_until: null },
-          });
-        }
-      } else {
-        // Reset all mock users
-        const users = await (this.authService as any).prisma.auth_users.findMany();
-        for (const u of users) {
-          await (this.authService as any).prisma.auth_users.update({
-            where: { id: u.id },
-            data: { failed_login_attempts: 0, locked_until: null },
-          });
-        }
-      }
-    } catch {}
+  @UseGuards(AuthGuard('jwt'), RbacGuard)
+  @CanView('USER_MANAGEMENT')
+  async getThrottleStatus() {
     return {
       success: true,
-      message: username ? `Attempts reset for ${username} (GLOBAL reset)` : 'All attempts reset (GLOBAL + per-user)',
+      data: this.authService.getThrottleOverview(),
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Clear login throttle counters and any persisted account lockout.
+   *
+   * Was anonymous, so anyone could unlock any account - including one they had
+   * just locked by brute-forcing it. Now requires USER_MANAGEMENT/EDIT, the
+   * same permission as the per-user unlock in Administration -> User
+   * Management. Pass a username to clear one account, or omit it to clear all.
+   */
+  @Post('reset-attempts')
+  @UseGuards(AuthGuard('jwt'), RbacGuard)
+  @CanEdit('USER_MANAGEMENT')
+  async resetAttempts(@Body() body: { username?: string }, @Req() req: any) {
+    const username = body?.username?.trim();
+    const throttle = await this.authService.resetAttempts(username, req.ip);
+
+    let persistedCleared = 0;
+    if (username) {
+      const user = await this.authService.findUserByIdentifier(username);
+      if (user) {
+        await this.authService.clearAccountLockout(user.id);
+        persistedCleared = 1;
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        username: username || null,
+        throttleCountersCleared: throttle.cleared,
+        persistedLockoutsCleared: persistedCleared,
+        backend: throttle.backend,
+      },
+      message: username
+        ? `Attempts reset for ${username}`
+        : 'All login throttle counters reset',
       timestamp: new Date().toISOString(),
     };
   }

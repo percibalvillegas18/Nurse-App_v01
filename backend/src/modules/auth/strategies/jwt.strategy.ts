@@ -3,12 +3,15 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma.service';
+import { resolveJwtSecret } from '../../../config/jwt.env';
 
 export interface JwtPayload {
   sub: number; // user id
   username: string;
   role: string;
   primaryRoleId?: number;
+  /** Bound login session; tokens issued before session binding omit it. */
+  sessionId?: string;
   iat?: number;
   exp?: number;
 }
@@ -22,7 +25,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'dev-secret-key-change-in-production-please-use-64-chars-min',
+      // Same resolution as the signing side - never a published default.
+      secretOrKey: resolveJwtSecret('JWT_SECRET', (k) =>
+        configService.get<string>(k),
+      ).value,
     });
   }
 
@@ -64,16 +70,40 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Account is locked');
     }
 
+    // Reject tokens whose bound session has been logged out or revoked.
+    // Mock/preview mode keeps sessions in memory, so this is enforced there too.
+    if (payload.sessionId) {
+      const session = await this.prisma.auth_sessions.findUnique({
+        where: { id: payload.sessionId },
+        select: { status: true, user_id: true },
+      });
+      if (!session || session.user_id !== user.id) {
+        throw new UnauthorizedException('Session no longer exists');
+      }
+      if (session.status !== 'Active') {
+        throw new UnauthorizedException(`Session is ${session.status}`);
+      }
+    }
+
+    // NOTE: do not spread `payload` here. It used to end with `...payload`,
+    // which re-added the raw `sub` claim *after* `userId`, so `req.user.sub`
+    // silently overrode the mapped id and `req.user.id` became undefined -
+    // logout then revoked `where: { id: <sessionId>, user_id: undefined }`,
+    // i.e. nothing, and the token stayed valid after logout.
     return {
       id: user.id,
+      userId: user.id,
       username: user.username,
       email: user.email,
       fullName: user.full_name,
       status: user.status,
       primaryRole: user.primary_role,
       roles: user.user_role_assignments.map((ura) => ura.role),
+      roleCode: user.primary_role?.code,
+      roleName: user.primary_role?.name,
       // Keep legacy fields for compatibility
       primaryRoleId: user.primary_role_id,
+      sessionId: payload.sessionId,
     };
   }
 }

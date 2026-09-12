@@ -49,11 +49,10 @@ class FakePrisma {
   }
 
   get auth_users() {
-    const self = this;
     return {
       findMany: async () => this.users,
       count: async () => this.users.length,
-      findFirst: async (args: any) => this.users.find(self.eq(args?.where)) ?? null,
+      findFirst: async (args: any) => this.users.find(this.eq(args?.where)) ?? null,
       findUnique: async (args: any) => {
         const u = this.users.find((x) => x.id === args?.where?.id);
         if (!u) return null;

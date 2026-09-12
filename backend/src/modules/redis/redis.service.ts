@@ -19,15 +19,33 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       port,
       password: password || undefined,
       db,
+      /**
+       * Exponential backoff with jitter, and no retry limit.
+       *
+       * The previous strategy returned null after 10 attempts, which permanently
+       * closed the client: a Redis restart longer than ~1s left this process
+       * with caching (and shared login throttling) silently disabled until the
+       * whole app was redeployed. Keep trying forever - every operation is
+       * already guarded by isReady(), so being disconnected is safe.
+       */
       retryStrategy: (times) => {
-        if (times > 10) {
-          this.logger.error('Redis retry limit exceeded, giving up');
-          return null;
+        const backoff = Math.min(50 * Math.pow(2, Math.min(times - 1, 9)), 30000);
+        const jitter = Math.floor(Math.random() * 250);
+        if (times === 1 || times % 10 === 0) {
+          this.logger.warn(
+            `Redis reconnect attempt #${times} in ${backoff + jitter}ms (retrying indefinitely)`,
+          );
         }
-        const delay = Math.min(times * 50, 2000);
-        return delay;
+        return backoff + jitter;
       },
+      /** Drop a command after 3 tries instead of queueing it forever offline. */
       maxRetriesPerRequest: 3,
+      /** Recover from a half-open socket instead of waiting for the OS timeout. */
+      enableOfflineQueue: false,
+      reconnectOnError: (err) => {
+        const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'];
+        return targetErrors.some((code) => err.message.includes(code));
+      },
       lazyConnect: true,
     });
 
@@ -36,12 +54,29 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.client.on('ready', () => {
+      const wasDown = !this.isConnected;
       this.isConnected = true;
       this.logger.log('✅ Redis connected and ready');
+      if (wasDown) {
+        // Cached RBAC decisions may be stale relative to changes made while we
+        // were disconnected - drop them rather than serve wrong answers.
+        this.logger.warn(
+          'Redis recovered after an outage: clearing RBAC cache to avoid stale access decisions',
+        );
+        void this.invalidateAllRbacCache();
+      }
     });
 
-    this.client.on('error', (err) => {
-      this.logger.error(`Redis error: ${err.message}`);
+    this.client.on('reconnecting', (delay: number) => {
+      this.isConnected = false;
+      this.logger.warn(`Redis reconnecting in ${delay}ms`);
+    });
+
+    this.client.on('error', (err: any) => {
+      // ECONNREFUSED arrives with an empty message, which used to log as
+      // "Redis error: " with no clue what went wrong.
+      const reason = err?.message || err?.code || String(err);
+      this.logger.error(`Redis error: ${reason}`);
       this.isConnected = false;
     });
 

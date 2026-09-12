@@ -25,18 +25,28 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
-      
+
       if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
       } else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
         const resp = exceptionResponse as any;
-        message = resp.message || resp.error || message;
+        // ValidationPipe produces message: string[] - flatten it so clients get
+        // one readable string instead of a JSON array.
+        message = Array.isArray(resp.message)
+          ? resp.message.join('; ')
+          : resp.message || resp.error || message;
         errorCode = resp.error || errorCode;
-        details = resp.details || resp;
+        details = resp.details || (Array.isArray(resp.message) ? resp.message : resp);
       }
     } else if (exception instanceof Error) {
-      message = exception.message;
+      // Never echo an internal error message (SQL text, file paths, connection
+      // strings) back to the client - log it server-side only.
       this.logger.error(`Unhandled exception: ${exception.message}`, exception.stack);
+    }
+
+    if (status >= 500) {
+      message = 'Internal server error';
+      details = undefined;
     }
 
     // Map status to error code if not set
