@@ -1,114 +1,141 @@
-# Nurse-App_v01 - Hospital Nursing Workforce Management System
+# Nurse-App_v01 — Hospital Nursing Workforce Management System
+
+RBAC-based nursing workforce platform: employment contracts, credentials, rostering, and audit — NestJS + Prisma + PostgreSQL + Redis backend, React 18 + Vite + Ant Design frontend.
 
 ## Overview
-Complete RBAC-based Nurse Workforce Management System with NestJS + Prisma backend.
 
-## Repository Structure
+| Layer | Stack |
+|--------|--------|
+| API | NestJS 10, Prisma 5, Passport JWT, class-validator |
+| Data | PostgreSQL (multi-schema), Redis cache |
+| AuthZ | Multi-role effective access + data scopes |
+| Audit | Tamper-proof hash chain, monthly partitions, PHI read logging |
+| Domain | Nurses · credentials · **Contract Master** · roster |
+| Frontend | React 18, Vite, Ant Design |
+| Preview | Express mock server (in-memory; **not for production**) |
+| Ops | Docker Compose, GitHub Actions CI |
+
+**Agencies supported on contracts:** MOH (civil service), SOP (self-operating / hospital direct hire), HCC / HHC (third-party manpower).
+
+---
+
+## Repository structure
+
 ```
 Nurse-App_v01/
-── ANALYSIS.md                                   # Deep repo analysis (generated)
-── Hospital-RBAC-Complete-Documentation-v1.0.md  # V1 spec (legacy)
-── Effective Access Function + Role Model...txt  # V2 Phase 0 spec (authoritative)
-── docker-compose.yml                            # Postgres + Redis + pgAdmin + Backend
-── docs/
-│   ── HIPAA_COMPLIANCE_CHECKLIST.md             # HIPAA technical + administrative checklist
-── backend/                                      # NestJS backend
-│   ── mock-server.js                            # Express mock API - DEMO/PREVIEW ONLY, never deploy
-│   ── src/
-│   │   ── main.ts
-│   │   ── app.module.ts
-│   │   ── health.controller.ts                  # Real DB/Redis readiness checks
-│   │   ── common/
-│   │   │   ── guards/rbac.guard.ts              # Core authorization guard
-│   │   │   ── decorators/require-permission.decorator.ts
-│   │   │   ── interceptors/audit.interceptor.ts
-│   │   │   └─ filters/http-exception.filter.ts
-│   │   └─ modules/
-│   │       ── auth/                             # JWT, login, sessions
-│   │       ── rbac/                             # Effective access, menus, permissions
-│   │       └─ audit/                            # Audit logging
-│   ── prisma/
-│   │   ── schema.prisma                         # Multi-schema Prisma model
-│   │   └─ seed.ts                               # Real hospital seed with bcrypt
-│   ── database/migrations/
-│   │   ── V1_0__initial_schema.sql
-│   │   ── V1_1__system_tables.sql
-│   │   ── V2_0__effective_access_function.sql   # Initial version
-│   │   ── V2_1__role_model_redesign.sql         # Hospital roles + assignments
-│   │   ── V2_2__rbac_tables_role_updates.sql
-│   │   ── V2_3__seed_hospital_roles_and_users.sql
-│   │   ── V2_4__seed_rbac_configuration.sql     # Menus/permissions matrix
-│   │   ── V2_5__fix_evaluate_access_multirole.sql # FIXED production version
-│   │   ── V3_0__nursing_domain.sql              # Nurses, credentials, roster assignments
-│   │   ── V3_1__seed_nursing_demo.sql           # Demo nurses/credentials/roster (idempotent)
-│   │   ── V3_2__nurse_personal_fields.sql       # Middle name, gender, DOB, nationality
-│   │   ── V3_3__drop_nurse_email.sql            # Email comes from the linked user account
-│   │   └─ V3_4__nurse_job_no.sql                # Job No. (manual, unique) on the nurse record
-│   ── scripts/run-migrations.ts
-│   ── Dockerfile
-│   ── package.json
-│   └─ README.md
-└─ frontend/                                     # React 18 + Vite + Ant Design
-    └─ src/
-        ── api/client.ts                         # Axios w/ JWT + refresh interceptor
-        ── hooks/useEffectiveAccess.ts           # usePermission(menu, perm)
-        ── context/AuthContext.tsx
-        └─ pages/                                # Login, Dashboard, NurseMaster,
-                                                  # Roster, RBAC admin (Roles,
-                                                  # EffectiveAccess, AuditLogs, CacheStats)
+├── ANALYSIS.md
+├── Hospital-RBAC-Complete-Documentation-v1.0.md   # V1 spec (legacy)
+├── Effective Access Function + Role Model...txt  # V2 Phase 0 (authoritative)
+├── docker-compose.yml                            # Postgres + Redis + pgAdmin + Backend
+├── REDIS_CACHING.md
+├── docs/
+│   ├── HIPAA_COMPLIANCE_CHECKLIST.md
+│   ├── TAMPER_PROOF_AUDIT_LOGS.md
+│   ├── PHI_READ_AUDITING.md
+│   ├── AUDIT_LOG_PARTITIONING.md
+│   ├── CONTRACT_MASTER.md
+│   ├── CONTRACT_EXPIRY_ALERTS.md
+│   ├── CONTRACT_ACTIVE_EXCLUSIVITY.md
+│   ├── ROSTER_CONTRACT_GUARD.md
+│   ├── STAFF_CREDENTIAL_TRACKING.md
+│   └── …
+├── backend/
+│   ├── mock-server.js                            # DEMO/PREVIEW ONLY
+│   ├── mock-contract-routes.js
+│   ├── src/
+│   │   ├── main.ts · app.module.ts · health.controller.ts
+│   │   ├── common/          # RBAC guard, audit interceptor, filters
+│   │   └── modules/
+│   │       ├── auth/ · rbac/ · audit/ · users/
+│   │       ├── nursing/     # nurses, credentials, roster (+ data scopes)
+│   │       └── contracts/   # Contract Master lifecycle
+│   ├── prisma/schema.prisma · seed.ts
+│   ├── database/migrations/   # V1_0 … V4_3 (see below)
+│   ├── scripts/
+│   │   ├── run-migrations.ts
+│   │   └── run-contract-expiry-alerts.ts
+│   └── package.json
+└── frontend/                  # React 18 + Vite + Ant Design
+    └── src/
+        ├── api/client.ts
+        ├── hooks/useEffectiveAccess.ts
+        ├── context/AuthContext.tsx
+        └── pages/             # Login, Dashboard, NurseMaster, Credentials,
+                               # Roster, Contracts, Users, RBAC admin, Audit
 ```
 
-## Quick Start (Docker)
+---
+
+## Migrations (V1 → V4)
+
+Apply with the ordered runner (preferred):
 
 ```bash
-# Start all services
-docker-compose up -d
-
-# Check logs
-docker-compose logs -f backend
-
-# API at http://localhost:4000/api/v1
-# pgAdmin at http://localhost:5050 (admin@hospital.local / admin)
+export DATABASE_URL=postgresql://devuser:devpassword@localhost:5432/hospital_rbac_dev
+npx ts-node scripts/run-migrations.ts
+# options: --dry-run | --baseline | --force | --continue-on-error
 ```
 
-## Quick Start (Local Dev)
+| Version | Purpose |
+|---------|---------|
+| **V1_0 – V1_1** | Core schema, system tables |
+| **V2_0 – V2_5** | Effective access (multi-role), hospital roles, RBAC seed |
+| **V3_0 – V3_4** | Nursing domain, demo seed, personal fields, job no. |
+| **V3_5** | Tamper-proof audit logs (SHA-256 chain + triggers) |
+| **V3_6** | Audit log monthly range partitioning helpers |
+| **V4_0** | **Contract Master** — lifecycle, agencies, `nurse_has_valid_contract` |
+| **V4_1** | Contract expiry alerts |
+| **V4_2** | Active-contract exclusivity (GiST / `btree_gist`, `active_span`) |
+| **V4_3** | Staff credential tracking (templates, position linkage) |
+
+History is recorded in `public.schema_migrations`.
+
+---
+
+## Quick start
+
+### Docker
+
+```bash
+docker-compose up -d
+docker-compose logs -f backend
+# API  http://localhost:4000/api/v1
+# pgAdmin  http://localhost:5050  (admin@hospital.local / admin)
+```
+
+### Local backend
 
 ```bash
 cd backend
-npm install
-cp .env.example .env.development
-# Edit .env.development with your DB URL
+npm ci
+cp .env.example .env.development   # set DATABASE_URL, JWT, Redis
 
-# Start only DBs
 docker-compose up -d postgres redis
 
-# Run migrations
 export DATABASE_URL=postgresql://devuser:devpassword@localhost:5432/hospital_rbac_dev
-psql $DATABASE_URL -f database/migrations/V1_0__initial_schema.sql
-psql $DATABASE_URL -f database/migrations/V1_1__system_tables.sql
-psql $DATABASE_URL -f database/migrations/V2_1__role_model_redesign.sql
-psql $DATABASE_URL -f database/migrations/V2_2__rbac_tables_role_updates.sql
-psql $DATABASE_URL -f database/migrations/V2_3__seed_hospital_roles_and_users.sql
-psql $DATABASE_URL -f database/migrations/V2_4__seed_rbac_configuration.sql
-psql $DATABASE_URL -f database/migrations/V2_5__fix_evaluate_access_multirole.sql
-psql $DATABASE_URL -f database/migrations/V3_0__nursing_domain.sql
-psql $DATABASE_URL -f database/migrations/V3_1__seed_nursing_demo.sql
-psql $DATABASE_URL -f database/migrations/V3_2__nurse_personal_fields.sql
-psql $DATABASE_URL -f database/migrations/V3_3__drop_nurse_email.sql
-psql $DATABASE_URL -f database/migrations/V3_4__nurse_job_no.sql
-
-# Or use script
-npx ts-node scripts/run-migrations.ts
-
-# Prisma
+npm run db:migrate:raw             # runs V1_0 … V4_3
 npx prisma generate
 npm run prisma:seed
 
-# Start backend
 npm run start:dev
 ```
 
-## Test Login
+### Mock server (preview only)
+
+```bash
+cd backend && npm run mock         # or mock:watch
+# Frontend points at the mock API; no Postgres required
+```
+
+### Contract expiry scan (Nest path)
+
+```bash
+npm run alerts:scan                # scripts/run-contract-expiry-alerts.ts
+```
+
+---
+
+## Test login
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/auth/login \
@@ -116,73 +143,98 @@ curl -X POST http://localhost:4000/api/v1/auth/login \
   -d '{"username":"admin.system","password":"Password123!"}'
 ```
 
-Default users (password `Password123!`):
-- admin.system (SYSTEM_ADMIN)
-- susan.lee (NURSE_MANAGER)
-- james.wilson (CHARGE_NURSE)
-- maria.garcia (RN)
-- ahmed.hassan (RN)
-- jennifer.smith (LPN)
-- david.kim (CNA)
-- rachel.brown (SCHEDULER)
-- patricia.johnson (HR_ADMIN)
-- michael.wong (COMPLIANCE_OFFICER)
+Default password for seeded users: **`Password123!`**
 
-## Effective Access Fix (V2_5)
+| Username | Role |
+|----------|------|
+| admin.system | SYSTEM_ADMIN |
+| susan.lee | NURSE_MANAGER |
+| james.wilson | CHARGE_NURSE |
+| maria.garcia / ahmed.hassan | RN |
+| jennifer.smith | LPN |
+| david.kim | CNA |
+| rachel.brown | SCHEDULER |
+| patricia.johnson | HR_ADMIN |
+| michael.wong | COMPLIANCE_OFFICER |
 
-**Problem:** V2_0 only checked `primary_role_id`, ignored many-to-many assignments.
+---
 
-**Fix:**
-- Now aggregates ALL active roles: `ARRAY_AGG(hr.code) WHERE ura.status='Active' AND temporal valid`
-- Uses `BOOL_OR` for OR logic: any role granting visible+enabled = accessible
-- Returns `user_roles TEXT[]` for audit
-- Improved cache TTL when expiry near
-- Data scope: handles `All` scope, counts scopes, TODO for resource-specific
+## Domain highlights (V3–V4)
 
-```sql
-SELECT BOOL_OR(rma.visible AND rma.enabled) FROM role_menu_access
-WHERE role_code = ANY(v_all_role_codes)
-```
+### Contract Master (V4_0+)
 
-## Next Steps
-- Leave management + workforce analytics domains
-- MFA, RLS hardening, audit partitioning
-- HIPAA gap closure (see `docs/HIPAA_COMPLIANCE_CHECKLIST.md`)
-- Load testing
+- Single employment-contract record per lifecycle: draft → approve/activate → renew → expire/terminate.
+- Types: fixed-term, permanent, temporary, and agency-specific (MOH / SOP / HCC / HHC).
+- **`nurse_has_valid_contract(nurse_id, on_date)`** — Active status + closed date interval `[start, end]`.
+- **Exclusivity (V4_2):** at most one **Active** contract per nurse for overlapping date ranges (GiST exclusion on generated `active_span`).
+- Renewals: deferred supersede of the prior Active row inside the same transaction as activate/approve (avoids coverage gaps).
+- Expiry alerts (V4_1) + CLI `npm run alerts:scan`.
+- See `docs/CONTRACT_MASTER.md`, `CONTRACT_ACTIVE_EXCLUSIVITY.md`, `CONTRACT_EXPIRY_ALERTS.md`.
 
-## Done Recently
-- ✅ User Management (Administration): real page replacing the TODO stub.
-  Nest `UsersModule` (list/get/lookups + create/edit + deactivate/reactivate +
-  admin-set password reset + per-user unlock + sessions & login history,
-  RBAC `USER_MANAGEMENT`, audit trail USER_CREATED/UPDATED/DEACTIVATED/
-  REACTIVATED/PASSWORD_RESET/UNLOCKED, 9 unit tests). Mock-server parity:
-  per-user passwords, suspended users can't log in, login-history/sessions
-  endpoints. Per user spec: standard fields only (no schema change),
-  primary + additional roles, unlock clears per-user counters only
-  (GLOBAL lockout counter unchanged)
-- ✅ Test preview = mock server (decision: option A). The arena test server runs
-  `backend/mock-server.js` (in-memory, no Postgres) + Vite frontend; no real DB
-  is connected. Note: sandbox snapshots exclude `node_modules` — if the preview
-  dies after a restore, run `npm ci` in `frontend/` and `backend/` and restart
-  both processes.
-- ✅ Mock auth realism: `/auth/me` now strict 401 without a valid bearer token;
-  refresh tokens are user-scoped, issued at login, invalidated at logout
-- ✅ Nursing area menus: Contract + Documents added (To Do placeholders);
-  Nurse Master / Credentials / Roster retained; area order per user spec
-- ✅ Nursing domain Phase 1: V3_0 schema (nurses/credentials/roster), V3_1 demo seed,
-  Nest `NursingModule` with RBAC-guarded CRUD (`/api/v1/nursing/*`), double-booking
-  prevention (409), audit logging, unit tests
-- ✅ Frontend wired to live data: NurseMaster (search/pagination/CRUD/drawer),
-  Credentials compliance radar, Roster calendar with day details
-- ✅ Frontend React app (React 18 + Vite + Ant Design)
-- ✅ Redis caching with per-user/per-role invalidation (see REDIS_CACHING.md)
-- ✅ Real `/health/ready` checks: DB `SELECT 1` via Prisma, Redis `PING`, 503 when DB down
-- ✅ CI workflow (`.github/workflows/ci.yml`): backend (npm ci, prisma generate, tsc, jest) + frontend (npm ci, tsc, build)
-- ✅ Lockfiles committed for reproducible `npm ci`
-- ✅ HIPAA compliance checklist mapped to current implementation (`docs/HIPAA_COMPLIANCE_CHECKLIST.md`)
+### Nursing & roster
 
-## Docs
-- See `docs/HIPAA_COMPLIANCE_CHECKLIST.md` for the full HIPAA technical, administrative, and organizational checklist with current status mapping
-- See `ANALYSIS.md` for deep analysis
-- See `backend/README.md` for backend details
-- Original specs: `Hospital-RBAC-Complete-Documentation-v1.0.md` and `Effective Access Function...txt`
+- Nurses (job no., position code, home unit), credentials, roster assignments.
+- **Data scopes** applied to nurse and roster reads/mutations (unit/department/self; destination validation).
+- Double-booking prevention (409).
+- Roster should refuse staff without a valid contract on the assignment date — see `docs/ROSTER_CONTRACT_GUARD.md` (SQL predicate is in V4_0; wire Nest/mock callers if not already on your branch).
+
+### Credentials (V4_3)
+
+- Template catalog, position linkage, verification workflow, expiring-soon horizon.
+- See `docs/STAFF_CREDENTIAL_TRACKING.md`.
+
+### Audit & HIPAA path
+
+- SHA-256 hash chaining + DB triggers (V3_5); monthly partition helpers (V3_6).
+- Audit interceptor; PHI read auditing notes; 6-year retention guidance in docs.
+- Checklist: `docs/HIPAA_COMPLIANCE_CHECKLIST.md`.
+
+### Effective access (V2_5)
+
+Aggregates **all** active roles (not only `primary_role_id`), `BOOL_OR` on menu access, returns `user_roles` for audit, Redis-backed with near-expiry TTL awareness.
+
+---
+
+## Done recently (summary)
+
+- ✅ **V4 Contract Master** — schema, Nest module, mock routes, agencies, lifecycle, renew + deferred supersede
+- ✅ **V4_2 exclusivity** — GiST active span; transactional activate/approve
+- ✅ **V4_1 expiry alerts** — scan script + docs
+- ✅ **V4_3 staff credential tracking**
+- ✅ **V3_5 / V3_6** tamper-proof audit + partitioning helpers
+- ✅ **Data scopes** on nurse and roster (#6)
+- ✅ User management (CRUD, roles, unlock, password reset, sessions, audit)
+- ✅ Nursing Phase 1 + frontend NurseMaster / Credentials / Roster
+- ✅ Redis cache invalidation, health readiness (DB + Redis), CI + lockfiles
+- ✅ HIPAA checklist and supporting audit docs
+
+---
+
+## Next steps
+
+- Enforce **roster → `nurse_has_valid_contract`** on every Nest and mock create/update path
+- Leave management + workforce analytics
+- MFA, row-level security on PHI tables, automated partition retention
+- Close remaining HIPAA gaps from the checklist
+- Load / security testing
+
+---
+
+## Docs index
+
+| Doc | Topic |
+|-----|--------|
+| `docs/HIPAA_COMPLIANCE_CHECKLIST.md` | Technical / admin / org checklist + status |
+| `docs/TAMPER_PROOF_AUDIT_LOGS.md` | Hash chain design |
+| `docs/PHI_READ_AUDITING.md` | PHI GET auditing |
+| `docs/AUDIT_LOG_PARTITIONING.md` | Monthly partitions / retention |
+| `docs/CONTRACT_MASTER.md` | Employment contract lifecycle |
+| `docs/CONTRACT_EXPIRY_ALERTS.md` | Automated expiry notifications |
+| `docs/CONTRACT_ACTIVE_EXCLUSIVITY.md` | Option A GiST constraint |
+| `docs/ROSTER_CONTRACT_GUARD.md` | Valid-contract gate for roster |
+| `docs/STAFF_CREDENTIAL_TRACKING.md` | Credential templates & tracking |
+| `REDIS_CACHING.md` | Cache keys and invalidation |
+| `ANALYSIS.md` | Deep analysis |
+| `backend/README.md` | Backend-specific notes |
+
+Original specs: `Hospital-RBAC-Complete-Documentation-v1.0.md`, `Effective Access Function + Role Model + Tests + Real Data.txt`.
