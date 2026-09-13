@@ -28,6 +28,7 @@ const order = [
   'V4_0__contract_master.sql',
   'V4_1__contract_expiry_alerts.sql',
   'V4_2__contract_active_exclusivity.sql',
+  'V4_3__staff_credential_tracking.sql',
 ];
 
 interface Flags {
