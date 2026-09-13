@@ -11,7 +11,13 @@ import {
   UseGuards,
   ParseIntPipe,
   DefaultValuePipe,
+  UseInterceptors,
+  UploadedFile,
+  StreamableFile,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { NursingService } from './nursing.service';
 import {
@@ -102,16 +108,17 @@ export class NursingController {
 
   @Get('nurses/:id/credentials')
   @CanView('CREDENTIALS')
-  async listNurseCredentials(@Param('id', ParseIntPipe) id: number) {
-    const data = await this.nursingService.listNurseCredentials(id);
+  async listNurseCredentials(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const data = await this.nursingService.listNurseCredentials(id, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Get('credentials/expiring')
   @CanView('CREDENTIALS')
-  async listExpiringCredentials(@Query('days') days?: string) {
+  async listExpiringCredentials(@Req() req: any, @Query('days') days?: string) {
     const data = await this.nursingService.listExpiringCredentials(
       days ? parseInt(days, 10) : undefined,
+      req.user.id,
     );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -143,6 +150,34 @@ export class NursingController {
   ) {
     const data = await this.nursingService.verifyCredential(id, dto, req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Post('credentials/:id/document')
+  @CanEdit('CREDENTIALS')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  async uploadDocument(@Param('id', ParseIntPipe) id: number, @UploadedFile() file: any, @Req() req: any) {
+    const data = await this.nursingService.uploadCredentialDocument(id, file, req.user.id);
+    return { success: true, data };
+  }
+
+  @Get('credentials/:id/document')
+  @CanView('CREDENTIALS')
+  async documentInfo(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return { success: true, data: await this.nursingService.getCredentialDocument(id, req.user.id) };
+  }
+
+  @Get('credentials/:id/document/download')
+  @CanView('CREDENTIALS')
+  async downloadDocument(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Res({ passthrough: true }) res: Response) {
+    const document = await this.nursingService.getCredentialDocument(id, req.user.id, true);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(Buffer.from(document.content), {
+      type: document.mediaType,
+      disposition: `attachment; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
+      length: document.size,
+    });
   }
 
   // ==========================================================================
@@ -194,13 +229,12 @@ export class NursingController {
   }
 
   // ==========================================================================
-  // Lookups - reference data for forms (JWT only; reference data is not
-  // RBAC-sensitive beyond login)
+  // Lookups - reference data for forms, limited to the caller's data scope.
   // ==========================================================================
 
   @Get('lookups')
-  async getLookups() {
-    const data = await this.nursingService.getLookups();
+  async getLookups(@Req() req: any) {
+    const data = await this.nursingService.getLookups(req.user.id);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 }

@@ -1,4 +1,6 @@
+import { STAFF_POSITIONS, CREDENTIAL_TEMPLATES } from '../staff-catalog';
 import {
+  IsObject,
   IsString,
   IsNotEmpty,
   IsOptional,
@@ -14,7 +16,7 @@ import {
 
 export const EMPLOYMENT_TYPES = ['FullTime', 'PartTime', 'PRN', 'Contract'] as const;
 export const NURSE_STATUSES = ['Active', 'OnLeave', 'Suspended', 'Terminated'] as const;
-export const CREDENTIAL_TYPES = ['License', 'Certification'] as const;
+export const CREDENTIAL_TYPES = ['License', 'Certification', 'Identity', 'Contract', 'Insurance', 'Clearance', 'Competency'] as const;
 export const CREDENTIAL_STATUSES = [
   'PendingVerification',
   'Valid',
@@ -35,6 +37,10 @@ export const ROSTER_STATUSES = [
 export const GENDERS = ['Male', 'Female'] as const;
 
 export class CreateNurseDto {
+  @IsOptional()
+  @IsIn(STAFF_POSITIONS.map(p => p.code))
+  position_code?: string;
+
   /** Optional - auto-generated (EMP-YYYY-NNNNN) when omitted */
   @IsOptional()
   @IsString()
@@ -110,6 +116,10 @@ export class CreateNurseDto {
 }
 
 export class UpdateNurseDto {
+  @IsOptional()
+  @IsIn(STAFF_POSITIONS.map(p => p.code))
+  position_code?: string;
+
   /** Job No. - optional on update, but never blank when provided. */
   @IsOptional()
   @IsString()
@@ -188,6 +198,14 @@ export class UpdateNurseDto {
 // ---------------------------------------------------------------------------
 
 export class CreateCredentialDto {
+  @IsOptional()
+  @IsIn(CREDENTIAL_TEMPLATES.map(t => t.code))
+  template_code?: string;
+
+  @IsOptional()
+  @IsObject()
+  tracking_data?: Record<string, string | number>;
+
   @IsInt()
   nurse_id: number;
 
@@ -220,6 +238,14 @@ export class CreateCredentialDto {
 
 export class UpdateCredentialDto {
   @IsOptional()
+  @IsIn(CREDENTIAL_TEMPLATES.map(t => t.code))
+  template_code?: string;
+
+  @IsOptional()
+  @IsObject()
+  tracking_data?: Record<string, string | number>;
+
+  @IsOptional()
   @IsIn(CREDENTIAL_TYPES as unknown as string[])
   credential_type?: string;
 
@@ -247,9 +273,6 @@ export class UpdateCredentialDto {
   @IsDateString()
   expiry_date?: string;
 
-  @IsOptional()
-  @IsIn(CREDENTIAL_STATUSES as unknown as string[])
-  status?: string;
 }
 
 export class VerifyCredentialDto {

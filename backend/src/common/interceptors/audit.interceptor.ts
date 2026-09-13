@@ -182,6 +182,11 @@ export class AuditInterceptor implements NestInterceptor {
   private sanitizeBody(body: any): any {
     if (!body || typeof body !== 'object') return null;
     const sanitized = { ...body };
+    // Credential fields can contain passport/residency identifiers and health status.
+    // Audit field names, without copying these values into another data store.
+    if ('tracking_data' in sanitized || 'template_code' in sanitized || 'credential_number' in sanitized) {
+      return { fields: Object.keys(sanitized) };
+    }
     delete sanitized.password;
     delete sanitized.password_hash;
     delete sanitized.refreshToken;

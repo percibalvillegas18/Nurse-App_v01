@@ -17,6 +17,7 @@ import { CheckCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icon
 import { usePermission } from '../hooks/useEffectiveAccess';
 import { useExpiringCredentials, useVerifyCredential } from '../hooks/useNursing';
 import { NurseCredential } from '../types';
+import { StaffCredentialTracker } from '../components/StaffCredentialTracker';
 
 const { Title } = Typography;
 
@@ -139,6 +140,7 @@ export const Credentials: React.FC = () => {
 
   return (
     <div>
+      <StaffCredentialTracker />
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={4}>Credential Compliance Radar</Title>
         <Space>

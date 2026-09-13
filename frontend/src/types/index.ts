@@ -219,7 +219,9 @@ export interface Nurse {
   userId: number | null;
   username: string | null;
   primaryRole: { id: number; code: string; name: string } | null;
-  homeUnit: { id: number; code: string; name: string } | null;
+  positionCode: string | null;
+  department: { id: number; name: string } | null;
+  homeUnit: { id: number; code: string; name: string; departmentId: number } | null;
   credentialSummary: CredentialSummary;
   credentialCounts: { total: number; expired: number; expiringSoon: number };
   createdAt: string;
@@ -229,7 +231,10 @@ export interface Nurse {
 export interface NurseCredential {
   id: number;
   nurseId: number;
-  credentialType: 'License' | 'Certification';
+  templateCode: string | null;
+  category: string | null;
+  trackingData: Record<string, string | number>;
+  credentialType: string;
   name: string;
   issuingAuthority: string | null;
   credentialNumber: string | null;
@@ -270,9 +275,17 @@ export interface NurseDetail extends Nurse {
   upcomingAssignments: RosterAssignment[];
 }
 
+export interface CredentialTemplate {
+  code: string; name: string; category: string; credentialType: string; description: string;
+  numberLabel?: string; authorityLabel?: string; issuedLabel?: string; expiryLabel?: string;
+  fields: Array<{ key: string; label: string; type: 'text' | 'date' | 'number' | 'select' | 'unit'; options?: string[] }>;
+}
 export interface NursingLookups {
+  positions: Array<{ code: string; name: string }>;
+  departments: Array<{ id: number; code: string; name: string }>;
+  credentialTemplates: CredentialTemplate[];
   roles: Array<{ id: number; code: string; name: string; category: string }>;
-  units: Array<{ id: number; code: string; name: string }>;
+  units: Array<{ id: number; code: string; name: string; department_id: number }>;
   shifts: Array<{ id: number; code: string; name: string; start_time: string; end_time: string }>;
   posts: Array<{ id: number; code: string; name: string; nursing_unit_id: number }>;
   /** Country display names for the Nationality selector */

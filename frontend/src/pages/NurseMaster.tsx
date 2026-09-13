@@ -75,6 +75,7 @@ export const NurseMaster: React.FC = () => {
   const [form] = Form.useForm();
 
   // Live full-name preview: First + Middle + Last (matches backend composition)
+  const departmentId = Form.useWatch('departmentId', form);
   const wFirst = Form.useWatch('firstName', form);
   const wMiddle = Form.useWatch('middleName', form);
   const wLast = Form.useWatch('lastName', form);
@@ -88,7 +89,11 @@ export const NurseMaster: React.FC = () => {
 
   const openEdit = (nurse: Nurse) => {
     setEditing(nurse);
+    form.resetFields();
     form.setFieldsValue({
+      positionCode: nurse.positionCode,
+      departmentId: nurse.homeUnit?.departmentId,
+      homeUnitId: nurse.homeUnit?.id,
       jobNo: nurse.jobNo,
       firstName: nurse.firstName,
       middleName: nurse.middleName,
@@ -106,6 +111,8 @@ export const NurseMaster: React.FC = () => {
   const submit = async () => {
     const values = await form.validateFields();
     const payload: any = {
+      position_code: values.positionCode,
+      home_unit_id: values.homeUnitId,
       job_no: values.jobNo,
       first_name: values.firstName,
       middle_name: values.middleName || undefined,
@@ -195,6 +202,12 @@ export const NurseMaster: React.FC = () => {
       ),
     },
     {
+      title: 'Position',
+      dataIndex: 'positionCode',
+      key: 'position',
+      render: (code: string | null) => code ? <Tag color="cyan">{code}</Tag> : '—',
+    },
+    {
       title: 'Role',
       dataIndex: ['primaryRole', 'code'],
       key: 'role',
@@ -204,7 +217,7 @@ export const NurseMaster: React.FC = () => {
     {
       title: 'Unit',
       key: 'unit',
-      render: (_: any, nurse: Nurse) => nurse.homeUnit?.code ?? '—',
+      render: (_: any, nurse: Nurse) => <Space direction="vertical" size={0}><Text>{nurse.homeUnit?.name ?? '—'}</Text><Text type="secondary">{nurse.department?.name}</Text></Space>,
     },
     {
       title: 'Type',
@@ -439,6 +452,16 @@ export const NurseMaster: React.FC = () => {
             </Col>
           </Row>
 
+          <Form.Item name="positionCode" label="Position" rules={[{ required: true, message: 'Select a position' }]}>
+            <Select showSearch optionFilterProp="label" options={(lookups?.positions ?? []).map(p => ({ value: p.code, label: p.code + ' (' + p.name + ')' }))} />
+          </Form.Item>
+          <Form.Item name="departmentId" label="Department" rules={[{ required: true, message: 'Select a department' }]}>
+            <Select showSearch optionFilterProp="label" onChange={() => form.setFieldValue('homeUnitId', undefined)} options={(lookups?.departments ?? []).map(d => ({ value: d.id, label: d.name }))} />
+          </Form.Item>
+          <Form.Item name="homeUnitId" label="Nursing Unit" rules={[{ required: true, message: 'Select a nursing unit' }]}>
+            <Select showSearch optionFilterProp="label" disabled={!departmentId} options={(lookups?.units ?? []).filter(u => u.department_id === departmentId).map(u => ({ value: u.id, label: u.name }))} />
+          </Form.Item>
+
           {editing && (
             <Form.Item name="status" label="Status" style={{ marginBottom: 8 }}>
               <Select
@@ -454,7 +477,7 @@ export const NurseMaster: React.FC = () => {
             message={
               editing
                 ? `Job No.: ${editing.jobNo ?? '—'} • Employee #: ${editing.employeeNumber}${editing.email ? ' • Email (from user account): ' + editing.email : ''}`
-                : 'Employee # is auto-generated on save; Job No. is the one identifier you type, and it must be unique. The email address comes from the user account. Employment Type, Hire Date and Home Unit are assigned later in the employment group.'
+                : 'Employee # is auto-generated on save; Job No. is the one identifier you type, and it must be unique. The email address comes from the user account. Select the staff position and department to choose a nursing unit.'
             }
           />
         </Form>
@@ -487,6 +510,8 @@ export const NurseMaster: React.FC = () => {
               <Descriptions.Item label="Contact No.">{viewedNurse.phone ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Email">{viewedNurse.email ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Primary Role">{viewedNurse.primaryRole?.name ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Position">{viewedNurse.positionCode ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Department">{viewedNurse.department?.name ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="Home Unit">{viewedNurse.homeUnit?.name ?? '—'}</Descriptions.Item>
             </Descriptions>
 

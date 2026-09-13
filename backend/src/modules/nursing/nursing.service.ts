@@ -1,4 +1,7 @@
+import { CREDENTIAL_TEMPLATES, STAFF_POSITIONS } from './staff-catalog';
 import {
+  BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -93,7 +96,7 @@ export class NursingService {
         where,
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
-          home_unit: { select: { id: true, code: true, name: true } },
+          home_unit: { select: { id: true, code: true, name: true, department_id: true, department: { select: { id: true, name: true } } } },
           user: { select: { username: true, email: true } },
           credentials: {
             where: { deleted_at: null },
@@ -128,7 +131,7 @@ export class NursingService {
       where: { id },
       include: {
         primary_role: { select: { id: true, code: true, name: true } },
-        home_unit: { select: { id: true, code: true, name: true } },
+        home_unit: { select: { id: true, code: true, name: true, department_id: true, department: { select: { id: true, name: true } } } },
         user: { select: { username: true, email: true } },
         credentials: {
           where: { deleted_at: null },
@@ -163,6 +166,7 @@ export class NursingService {
   }
 
   async createNurse(dto: CreateNurseDto, actorId: number) {
+    await this.validateStaffAssignment(dto, actorId);
     // Employee number is not entered by the user in the personal-info form -
     // auto-generate a unique one (can be edited later in the employment group).
     if (!dto.employee_number) {
@@ -187,12 +191,13 @@ export class NursingService {
           employment_type: dto.employment_type || 'FullTime',
           primary_role_id: dto.primary_role_id ?? null,
           home_unit_id: dto.home_unit_id ?? null,
+          position_code: dto.position_code ?? null,
           created_by: actorId,
           updated_by: actorId,
         },
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
-          home_unit: { select: { id: true, code: true, name: true } },
+          home_unit: { select: { id: true, code: true, name: true, department_id: true, department: { select: { id: true, name: true } } } },
           user: { select: { username: true, email: true } },
           credentials: { where: { deleted_at: null } },
         },
@@ -221,6 +226,7 @@ export class NursingService {
 
   async updateNurse(id: number, dto: UpdateNurseDto, actorId: number) {
     await this.ensureNurseExists(id);
+    await this.validateStaffAssignment(dto, actorId);
     try {
       const updated = await this.prisma.nursing_nurses.update({
         where: { id },
@@ -242,13 +248,14 @@ export class NursingService {
           }),
           ...(dto.employment_type !== undefined && { employment_type: dto.employment_type }),
           ...(dto.primary_role_id !== undefined && { primary_role_id: dto.primary_role_id }),
+          ...(dto.position_code !== undefined && { position_code: dto.position_code }),
           ...(dto.home_unit_id !== undefined && { home_unit_id: dto.home_unit_id }),
           ...(dto.status !== undefined && { status: dto.status }),
           updated_by: actorId,
         },
         include: {
           primary_role: { select: { id: true, code: true, name: true } },
-          home_unit: { select: { id: true, code: true, name: true } },
+          home_unit: { select: { id: true, code: true, name: true, department_id: true, department: { select: { id: true, name: true } } } },
           user: { select: { username: true, email: true } },
           credentials: { where: { deleted_at: null } },
         },
@@ -298,8 +305,8 @@ export class NursingService {
   // Credentials
   // ==========================================================================
 
-  async listNurseCredentials(nurseId: number) {
-    await this.ensureNurseExists(nurseId);
+  async listNurseCredentials(nurseId: number, actorId: number) {
+    await this.assertNurseScope(nurseId, actorId);
     const rows = await this.prisma.nursing_credentials.findMany({
       where: { nurse_id: nurseId, deleted_at: null },
       orderBy: { expiry_date: 'asc' },
@@ -307,16 +314,17 @@ export class NursingService {
     return { items: (rows || []).map((c: any) => this.mapCredentialRow(c)) };
   }
 
-  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS) {
+  async listExpiringCredentials(days: number = EXPIRING_SOON_DAYS, actorId: number) {
     const horizon = new Date();
     horizon.setDate(horizon.getDate() + Math.max(1, days));
+    const scope = await this.getScopeContext(actorId);
 
     const rows = await this.prisma.nursing_credentials.findMany({
       where: {
         deleted_at: null,
         status: { in: ['Valid', 'ExpiringSoon'] },
         expiry_date: { lte: horizon },
-        nurse: { deleted_at: null, status: 'Active' },
+        nurse: { deleted_at: null, status: 'Active', ...this.nurseScopeWhere(scope, actorId) },
       },
       include: {
         nurse: { select: { id: true, employee_number: true, first_name: true, last_name: true } },
@@ -341,11 +349,14 @@ export class NursingService {
   }
 
   async createCredential(dto: CreateCredentialDto, actorId: number) {
-    await this.ensureNurseExists(dto.nurse_id);
+    await this.assertNurseScope(dto.nurse_id, actorId);
+    const trackingData = await this.validateCredential(dto, actorId);
     try {
       const created = await this.prisma.nursing_credentials.create({
         data: {
           nurse_id: dto.nurse_id,
+          template_code: dto.template_code ?? null,
+          tracking_data: trackingData,
           credential_type: dto.credential_type,
           name: dto.name,
           issuing_authority: dto.issuing_authority ?? null,
@@ -377,7 +388,11 @@ export class NursingService {
   }
 
   async updateCredential(id: number, dto: UpdateCredentialDto, actorId: number) {
-    await this.ensureCredentialExists(id);
+    const existing = await this.assertCredentialScope(id, actorId);
+    if (dto.template_code !== undefined && dto.template_code !== existing.template_code) {
+      throw new BadRequestException("The credential template cannot be changed; add a separate credential instead");
+    }
+    const trackingData = await this.validateCredential({ ...existing, ...dto }, actorId);
     const updated = await this.prisma.nursing_credentials.update({
       where: { id },
       data: {
@@ -385,9 +400,12 @@ export class NursingService {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.issuing_authority !== undefined && { issuing_authority: dto.issuing_authority }),
         ...(dto.credential_number !== undefined && { credential_number: dto.credential_number }),
-        ...(dto.issued_date !== undefined && { issued_date: new Date(dto.issued_date) }),
-        ...(dto.expiry_date !== undefined && { expiry_date: new Date(dto.expiry_date) }),
-        ...(dto.status !== undefined && { status: dto.status }),
+        ...(dto.issued_date !== undefined && { issued_date: dto.issued_date ? new Date(dto.issued_date) : null }),
+        ...(dto.expiry_date !== undefined && { expiry_date: dto.expiry_date ? new Date(dto.expiry_date) : null }),
+        tracking_data: trackingData,
+        status: 'PendingVerification',
+        verified_by: null,
+        verified_at: null,
         updated_by: actorId,
       },
     });
@@ -398,7 +416,7 @@ export class NursingService {
       entityType: 'Credential',
       entityId: id,
       description: `Credential #${id} updated`,
-      changes: dto as any,
+      changes: { fields: Object.keys(dto) },
       status: 'Success',
     });
 
@@ -406,11 +424,15 @@ export class NursingService {
   }
 
   async verifyCredential(id: number, dto: VerifyCredentialDto, actorId: number) {
-    await this.ensureCredentialExists(id);
+    const existing = await this.assertCredentialScope(id, actorId);
+    const status = dto.status || 'Valid';
+    if (status === 'Valid' && existing.expiry_date && new Date(existing.expiry_date) < this.startOfToday()) {
+      throw new BadRequestException('Expired credentials cannot be verified as Valid');
+    }
     const updated = await this.prisma.nursing_credentials.update({
       where: { id },
       data: {
-        status: dto.status || 'Valid',
+        status,
         verified_by: actorId,
         verified_at: new Date(),
         updated_by: actorId,
@@ -422,7 +444,7 @@ export class NursingService {
       action: 'CREDENTIAL_VERIFIED',
       entityType: 'Credential',
       entityId: id,
-      description: `Credential #${id} verified -> ${dto.status || 'Valid'}`,
+      description: `Credential #${id} verified -> ${status}`,
       status: 'Success',
     });
 
@@ -576,16 +598,37 @@ export class NursingService {
   // Lookups (reference data for forms; JWT required, no RBAC menu guard)
   // ==========================================================================
 
-  async getLookups() {
-    const [roles, units, shifts, posts] = await Promise.all([
+  async getLookups(actorId: number) {
+    const scope = await this.getScopeContext(actorId);
+    const departmentScope = scope.all ? {} : {
+      OR: [
+        ...(scope.departmentIds.length ? [{ id: { in: scope.departmentIds } }] : []),
+        ...(scope.organizationIds.length ? [{ organization_id: { in: scope.organizationIds } }] : []),
+      ],
+    };
+    const unitScope = scope.all ? {} : {
+      OR: [
+        ...(scope.nursingUnitIds.length ? [{ id: { in: scope.nursingUnitIds } }] : []),
+        ...(scope.departmentIds.length ? [{ department_id: { in: scope.departmentIds } }] : []),
+        ...(scope.organizationIds.length ? [{ department: { organization_id: { in: scope.organizationIds } } }] : []),
+      ],
+    };
+    const postScope = scope.all ? {} : {
+      OR: [
+        ...(scope.nursingUnitIds.length ? [{ nursing_unit_id: { in: scope.nursingUnitIds } }] : []),
+        ...(scope.departmentIds.length ? [{ nursing_unit: { department_id: { in: scope.departmentIds } } }] : []),
+        ...(scope.organizationIds.length ? [{ nursing_unit: { department: { organization_id: { in: scope.organizationIds } } } }] : []),
+      ],
+    };
+    const [roles, units, shifts, posts, departments] = await Promise.all([
       this.prisma.system_hospital_roles.findMany({
         where: { status: 'Active' },
         select: { id: true, code: true, name: true, category: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.rbac_nursing_units.findMany({
-        where: { status: 'Active' },
-        select: { id: true, code: true, name: true },
+        where: { status: 'Active', department: { status: 'Active' }, ...unitScope },
+        select: { id: true, code: true, name: true, department_id: true },
         orderBy: { code: 'asc' },
       }),
       this.prisma.rbac_shifts.findMany({
@@ -594,17 +637,25 @@ export class NursingService {
         orderBy: { id: 'asc' },
       }),
       this.prisma.rbac_posts.findMany({
-        where: { status: 'Active' },
+        where: { status: 'Active', ...postScope },
         select: { id: true, code: true, name: true, nursing_unit_id: true },
         orderBy: { code: 'asc' },
+      }),
+      this.prisma.rbac_departments.findMany({
+        where: { status: 'Active', ...departmentScope },
+        select: { id: true, code: true, name: true },
+        orderBy: { name: 'asc' },
       }),
     ]);
 
     return {
-      roles: roles || [],
-      units: units || [],
-      shifts: shifts || [],
-      posts: posts || [],
+      positions: STAFF_POSITIONS,
+      credentialTemplates: CREDENTIAL_TEMPLATES,
+      departments: (departments || []).map(d => ({ ...d, id: Number(d.id) })),
+      roles: (roles || []).map(r => ({ ...r, id: Number(r.id) })),
+      units: (units || []).map(u => ({ ...u, id: Number(u.id), department_id: Number(u.department_id) })),
+      shifts: (shifts || []).map(s => ({ ...s, id: Number(s.id) })),
+      posts: (posts || []).map(p => ({ ...p, id: Number(p.id), nursing_unit_id: Number(p.nursing_unit_id) })),
       countries: COUNTRIES,
     };
   }
@@ -631,6 +682,108 @@ export class NursingService {
   // Internal helpers
   // ==========================================================================
 
+  private async validateStaffAssignment(dto: CreateNurseDto | UpdateNurseDto, actorId: number) {
+    if (dto.position_code != null && !STAFF_POSITIONS.some(p => p.code === dto.position_code)) {
+      throw new BadRequestException('Unknown staff position');
+    }
+    if (dto.home_unit_id != null) {
+      const unit = await this.prisma.rbac_nursing_units.findFirst({
+        where: { id: dto.home_unit_id, status: 'Active', department: { status: 'Active' } },
+        include: { department: { select: { id: true, organization_id: true } } },
+      });
+      if (!unit) throw new BadRequestException('Select an active nursing unit');
+      const scope = await this.getScopeContext(actorId);
+      if (!this.scopeAllowsUnit(scope, unit)) {
+        throw new ForbiddenException('The selected nursing unit is outside your assigned scope');
+      }
+    }
+  }
+
+  private async validateCredential(dto: any, actorId: number): Promise<Record<string, string | number>> {
+    const template = CREDENTIAL_TEMPLATES.find(t => t.code === dto.template_code);
+    if (dto.template_code && !template) throw new BadRequestException('Unknown credential template');
+    if (template && (template.name !== dto.name || template.credentialType !== dto.credential_type)) {
+      throw new BadRequestException('Credential name and type must match the selected template');
+    }
+    const validDate = (value: unknown): boolean => {
+      if (value instanceof Date) return !Number.isNaN(value.getTime());
+      return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+        && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+    };
+    for (const key of ['issued_date', 'expiry_date']) {
+      if (dto[key] != null && !validDate(dto[key])) throw new BadRequestException(`${key} must be a valid date`);
+    }
+    if (dto.issued_date && dto.expiry_date && new Date(dto.expiry_date) < new Date(dto.issued_date)) {
+      throw new BadRequestException('Expiry/reassessment date cannot precede issue/assessment date');
+    }
+    const data = dto.tracking_data ?? {};
+    if (typeof data !== 'object' || Array.isArray(data)) throw new BadRequestException('Invalid tracking data');
+    const result: Record<string, string | number> = {};
+    for (const [key, value] of Object.entries(data)) {
+      const field = template?.fields.find(f => f.key === key);
+      if (!field) throw new BadRequestException(`Unsupported tracking field: ${key}`);
+      if (value === '' || value == null) continue;
+      if (field.type === 'number' || field.type === 'unit') {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0
+          || ((field.type === 'unit' || key === 'supervisedCasesCount') && !Number.isInteger(value))) {
+          throw new BadRequestException(`${field.label} must be a non-negative ${key === 'coverageAmount' ? 'number' : 'integer'}`);
+        }
+        if (field.type === 'unit') await this.validateStaffAssignment({ home_unit_id: value }, actorId);
+      } else {
+        if (typeof value !== 'string' || value.length > 500) throw new BadRequestException(`${field.label} must be text up to 500 characters`);
+        if (field.type === 'date' && !validDate(value)) throw new BadRequestException(`${field.label} must be a valid date`);
+        if (field.type === 'select' && !field.options.includes(value)) throw new BadRequestException(`Invalid ${field.label}`);
+        if (key === 'expiryDateHijri' && !/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|30)$/.test(value)) {
+          throw new BadRequestException('Enter the Hijri date as YYYY-MM-DD');
+        }
+      }
+      result[key] = value as string | number;
+    }
+    return result;
+  }
+
+  async uploadCredentialDocument(id: number, file: { buffer: Buffer; originalname: string; mimetype: string }, actorId: number) {
+    await this.assertCredentialScope(id, actorId);
+    if (!file?.buffer?.length || file.buffer.length > 5 * 1024 * 1024) {
+      throw new BadRequestException('Upload a PDF, JPEG, or PNG file up to 5 MB');
+    }
+    const b = file.buffer;
+    const mediaType = b.subarray(0, 5).toString() === '%PDF-' ? 'application/pdf'
+      : b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png'
+        : b[0] === 255 && b[1] === 216 && b[2] === 255 ? 'image/jpeg' : null;
+    if (!mediaType || mediaType !== file.mimetype) throw new BadRequestException('Only PDF, JPEG, and PNG documents are accepted');
+    const fileName = Array.from(file.originalname, char =>
+      char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 || char === '/' || char === '\\' ? '_' : char,
+    ).join('').slice(0, 255);
+    // Parameterized SQL; storage and verification reset are atomic.
+    await this.prisma.$queryRawUnsafe(`
+      WITH saved AS (
+        INSERT INTO nursing.credential_documents (credential_id, file_name, media_type, content, uploaded_by)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (credential_id) DO UPDATE SET file_name = EXCLUDED.file_name,
+          media_type = EXCLUDED.media_type, content = EXCLUDED.content,
+          uploaded_by = EXCLUDED.uploaded_by, uploaded_at = CURRENT_TIMESTAMP
+        RETURNING credential_id
+      ) UPDATE nursing.credentials SET status = 'PendingVerification', verified_by = NULL,
+        verified_at = NULL, updated_by = $5, updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (SELECT credential_id FROM saved) RETURNING id`, id, fileName, mediaType, b, actorId);
+    return { fileName, mediaType, size: b.length };
+  }
+
+  async getCredentialDocument(id: number, actorId: number, includeContent = false) {
+    await this.assertCredentialScope(id, actorId);
+    const rows = await this.prisma.$queryRawUnsafe(`SELECT file_name, media_type,
+      octet_length(content) AS size, uploaded_at ${includeContent ? ', content' : ''}
+      FROM nursing.credential_documents WHERE credential_id = $1`, id);
+    const row = rows[0];
+    if (!row) {
+      if (includeContent) throw new NotFoundException('No document has been uploaded');
+      return null;
+    }
+    return { fileName: row.file_name, mediaType: row.media_type, size: row.size,
+      uploadedAt: row.uploaded_at, ...(includeContent && { content: row.content }) };
+  }
+
   private async ensureNurseExists(id: number) {
     const row = await this.prisma.nursing_nurses.findUnique({ where: { id } });
     if (!row || row.deleted_at) throw new NotFoundException(`Nurse #${id} not found`);
@@ -639,6 +792,68 @@ export class NursingService {
   private async ensureCredentialExists(id: number) {
     const row = await this.prisma.nursing_credentials.findUnique({ where: { id } });
     if (!row || row.deleted_at) throw new NotFoundException(`Credential #${id} not found`);
+    await this.ensureNurseExists(Number(row.nurse_id));
+    return row;
+  }
+
+  private async getScopeContext(actorId: number) {
+    const now = new Date();
+    const scopes = await this.prisma.rbac_user_data_scopes.findMany({
+      where: {
+        user_id: actorId,
+        status: 'Active',
+        AND: [
+          { OR: [{ effective_from: null }, { effective_from: { lte: now } }] },
+          { OR: [{ effective_to: null }, { effective_to: { gte: now } }] },
+        ],
+      },
+      select: { scope_type: true, organization_id: true, department_id: true, nursing_unit_id: true },
+    });
+    return {
+      all: scopes.some((s: any) => s.scope_type === 'All'),
+      assigned: scopes.some((s: any) => s.scope_type === 'Assigned'),
+      organizationIds: scopes.filter((s: any) => s.scope_type === 'Hospital' && s.organization_id != null).map((s: any) => s.organization_id),
+      departmentIds: scopes.filter((s: any) => s.scope_type === 'Department' && s.department_id != null).map((s: any) => s.department_id),
+      nursingUnitIds: scopes.filter((s: any) => s.scope_type === 'NursingUnit' && s.nursing_unit_id != null).map((s: any) => s.nursing_unit_id),
+    };
+  }
+
+  private scopeAllowsUnit(scope: any, unit: any): boolean {
+    if (scope.all) return true;
+    const unitId = String(unit.id);
+    const departmentId = String(unit.department_id ?? unit.department?.id ?? '');
+    const organizationId = String(unit.department?.organization_id ?? '');
+    return scope.nursingUnitIds.some((id: any) => String(id) === unitId)
+      || scope.departmentIds.some((id: any) => String(id) === departmentId)
+      || scope.organizationIds.some((id: any) => String(id) === organizationId);
+  }
+
+  private nurseScopeWhere(scope: any, actorId: number): any {
+    if (scope.all) return {};
+    const OR: any[] = [];
+    if (scope.assigned) OR.push({ user_id: actorId });
+    if (scope.nursingUnitIds.length) OR.push({ home_unit_id: { in: scope.nursingUnitIds } });
+    if (scope.departmentIds.length) OR.push({ home_unit: { department_id: { in: scope.departmentIds } } });
+    if (scope.organizationIds.length) OR.push({ home_unit: { department: { organization_id: { in: scope.organizationIds } } } });
+    return { OR };
+  }
+
+  private async assertNurseScope(nurseId: number, actorId: number) {
+    const nurse = await this.prisma.nursing_nurses.findUnique({
+      where: { id: nurseId },
+      include: { home_unit: { include: { department: true } } },
+    });
+    if (!nurse || nurse.deleted_at) throw new NotFoundException(`Nurse #${nurseId} not found`);
+    const scope = await this.getScopeContext(actorId);
+    if (scope.all || (scope.assigned && Number(nurse.user_id) === actorId)
+      || (nurse.home_unit && this.scopeAllowsUnit(scope, nurse.home_unit))) return nurse;
+    throw new ForbiddenException('This staff record is outside your assigned scope');
+  }
+
+  private async assertCredentialScope(id: number, actorId: number) {
+    const credential = await this.ensureCredentialExists(id);
+    await this.assertNurseScope(Number(credential.nurse_id), actorId);
+    return credential;
   }
 
   private async ensureRosterExists(id: number) {
@@ -660,8 +875,9 @@ export class NursingService {
 
   private startOfToday(): Date {
     const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
+    // PostgreSQL DATE values are represented at UTC midnight. Compare calendar
+    // dates at that same boundary rather than rounding a timezone offset up.
+    return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   }
 
   private toDateOnly(d: Date | string): string {
@@ -730,8 +946,10 @@ export class NursingService {
       primaryRole: r.primary_role
         ? { id: Number(r.primary_role.id), code: r.primary_role.code, name: r.primary_role.name }
         : null,
+      positionCode: r.position_code ?? null,
+      department: r.home_unit?.department ? { id: Number(r.home_unit.department.id), name: r.home_unit.department.name } : null,
       homeUnit: r.home_unit
-        ? { id: Number(r.home_unit.id), code: r.home_unit.code, name: r.home_unit.name }
+        ? { id: Number(r.home_unit.id), code: r.home_unit.code, name: r.home_unit.name, departmentId: Number(r.home_unit.department_id) }
         : null,
       ...this.summarizeCredentials(r.credentials || []),
       createdAt: r.created_at,
@@ -745,6 +963,9 @@ export class NursingService {
     return {
       id: Number(c.id),
       nurseId: Number(c.nurse_id),
+      templateCode: c.template_code ?? null,
+      trackingData: c.tracking_data ?? {},
+      category: CREDENTIAL_TEMPLATES.find(t => t.code === c.template_code)?.category ?? null,
       credentialType: c.credential_type,
       name: c.name,
       issuingAuthority: c.issuing_authority,

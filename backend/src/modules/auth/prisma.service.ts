@@ -1,5 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 
+const MOCK_PASSWORD_HASH = process.env.NURSE_APP_MOCK_PASSWORD_HASH || '';
+
 @Injectable()
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
@@ -36,16 +38,16 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   // Mock data for preview when DB not available or client not generated
   private mockData = {
     users: [
-      { id: 1, username: 'admin.system', email: 'admin@hospital.local', full_name: 'System Administrator', status: 'Active', primary_role_id: 9, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 2, username: 'susan.lee', email: 'susan.lee@hospital.local', full_name: 'Susan Lee - Nurse Manager, ICU', status: 'Active', primary_role_id: 5, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 3, username: 'james.wilson', email: 'james.wilson@hospital.local', full_name: 'James Wilson - Charge Nurse, ICU', status: 'Active', primary_role_id: 4, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 4, username: 'maria.garcia', email: 'maria.garcia@hospital.local', full_name: 'Maria Garcia - RN', status: 'Active', primary_role_id: 1, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 5, username: 'ahmed.hassan', email: 'ahmed.hassan@hospital.local', full_name: 'Ahmed Hassan - RN', status: 'Active', primary_role_id: 1, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 6, username: 'jennifer.smith', email: 'jennifer.smith@hospital.local', full_name: 'Jennifer Smith - LPN', status: 'Active', primary_role_id: 2, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 7, username: 'david.kim', email: 'david.kim@hospital.local', full_name: 'David Kim - CNA', status: 'Active', primary_role_id: 3, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 8, username: 'rachel.brown', email: 'rachel.brown@hospital.local', full_name: 'Rachel Brown - Scheduler', status: 'Active', primary_role_id: 6, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 9, username: 'patricia.johnson', email: 'patricia.johnson@hospital.local', full_name: 'Patricia Johnson - HR Admin', status: 'Active', primary_role_id: 7, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
-      { id: 10, username: 'michael.wong', email: 'michael.wong@hospital.local', full_name: 'Michael Wong - Compliance', status: 'Active', primary_role_id: 8, password_hash: '$2a$12$PYOqvULr79bU6j7FwSSr7uyDJNrjmVMXZGWd4CYhjLTy2RFUvOi1q', failed_login_attempts: 0, locked_until: null },
+      { id: 1, username: 'admin.system', email: 'admin@hospital.local', full_name: 'System Administrator', status: 'Active', primary_role_id: 9, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 2, username: 'susan.lee', email: 'susan.lee@hospital.local', full_name: 'Susan Lee - Nurse Manager, ICU', status: 'Active', primary_role_id: 5, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 3, username: 'james.wilson', email: 'james.wilson@hospital.local', full_name: 'James Wilson - Charge Nurse, ICU', status: 'Active', primary_role_id: 4, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 4, username: 'maria.garcia', email: 'maria.garcia@hospital.local', full_name: 'Maria Garcia - RN', status: 'Active', primary_role_id: 1, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 5, username: 'ahmed.hassan', email: 'ahmed.hassan@hospital.local', full_name: 'Ahmed Hassan - RN', status: 'Active', primary_role_id: 1, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 6, username: 'jennifer.smith', email: 'jennifer.smith@hospital.local', full_name: 'Jennifer Smith - LPN', status: 'Active', primary_role_id: 2, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 7, username: 'david.kim', email: 'david.kim@hospital.local', full_name: 'David Kim - CNA', status: 'Active', primary_role_id: 3, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 8, username: 'rachel.brown', email: 'rachel.brown@hospital.local', full_name: 'Rachel Brown - Scheduler', status: 'Active', primary_role_id: 6, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 9, username: 'patricia.johnson', email: 'patricia.johnson@hospital.local', full_name: 'Patricia Johnson - HR Admin', status: 'Active', primary_role_id: 7, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
+      { id: 10, username: 'michael.wong', email: 'michael.wong@hospital.local', full_name: 'Michael Wong - Compliance', status: 'Active', primary_role_id: 8, password_hash: MOCK_PASSWORD_HASH, failed_login_attempts: 0, locked_until: null },
     ],
     roles: [
       { id: 1, code: 'RN', name: 'Registered Nurse' },
@@ -452,6 +454,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * a query error against a real database is rethrown, never silently
    * downgraded to a fake ALLOW.
    */
+  $queryRawUnsafe<T = any[]>(query: string, ...params: any[]): Promise<T>;
   async $queryRawUnsafe(query: string, ...params: any[]): Promise<any[]> {
     const client = this.getClient();
     if (client && !this.isMock) {
@@ -474,6 +477,13 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
 
     // Mock implementation for evaluate_access and other functions
     return this.mockQueryRaw(query, params);
+  }
+
+  /** Raw writes used by the contract module must have a real database. */
+  async $executeRawUnsafe(query: string, ...params: any[]): Promise<number> {
+    const client = this.getClient();
+    if (!client || this.isMock) throw new Error('Raw database writes require a database connection');
+    return client.$executeRawUnsafe(query, ...params);
   }
 
   /** Role code for a mock user, mirroring mockData.users[].primary_role_id. */
@@ -798,7 +808,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   }
 
   // For transaction support (mock)
-  async $transaction<T>(fn: (prisma: any) => Promise<T>): Promise<T> {
+  async $transaction<T>(fn: (prisma: Pick<PrismaService, '$queryRawUnsafe' | '$executeRawUnsafe'>) => Promise<T>): Promise<T> {
     const client = this.getClient();
     if (client && !this.isMock) {
       return client.$transaction(fn);

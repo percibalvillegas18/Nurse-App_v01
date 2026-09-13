@@ -487,6 +487,7 @@ model nursing_nurses {
   hire_date       DateTime? @db.Date
   employment_type String    @default("FullTime") @db.VarChar(50)
   primary_role_id BigInt?
+  position_code   String?   @db.VarChar(10)
   home_unit_id    BigInt?
   status          String    @default("Active") @db.VarChar(50)
   created_by      BigInt?
@@ -511,6 +512,8 @@ model nursing_nurses {
 model nursing_credentials {
   id                BigInt    @id @default(autoincrement())
   nurse_id          BigInt
+  template_code     String?   @db.VarChar(50)
+  tracking_data     Json      @default("{}") @db.JsonB
   credential_type   String    @db.VarChar(50)
   name              String    @db.VarChar(100)
   issuing_authority String?   @db.VarChar(255)

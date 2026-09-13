@@ -225,7 +225,12 @@ class FakePrisma {
   };
 
   system_hospital_roles = { findMany: async () => [] };
-  rbac_nursing_units = { findMany: async () => this.units };
+  rbac_nursing_units = {
+    findMany: async () => this.units,
+    findFirst: async ({ where }: any) => this.units.find(u => u.id === where.id) ?? null,
+  };
+  rbac_departments = { findMany: async () => [] };
+  rbac_user_data_scopes = { findMany: async () => [{ scope_type: 'All' }] };
   rbac_shifts = { findMany: async () => this.shifts };
   rbac_posts = { findMany: async () => [] };
 }
@@ -293,7 +298,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('lookups include the country list for nationality selection', async () => {
-      const lookups = await service.getLookups();
+      const lookups = await service.getLookups(1);
       expect(lookups.countries.length).toBeGreaterThan(150);
       expect(lookups.countries).toContain('Saudi');
       expect(lookups.countries).toContain('Philippines');
@@ -403,7 +408,7 @@ describe('NURSING SERVICE', () => {
     });
 
     it('expiring list includes near-expiry and flags nurse summary ExpiringSoon', async () => {
-      const exp = await service.listExpiringCredentials(30);
+      const exp = await service.listExpiringCredentials(30, 1);
       expect(exp.items).toHaveLength(1);
       expect(exp.items[0].name).toBe('BLS');
       expect(exp.items[0].nurse?.fullName).toBe('Maria Garcia');
