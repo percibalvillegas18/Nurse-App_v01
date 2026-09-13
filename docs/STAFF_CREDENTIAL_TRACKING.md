@@ -29,6 +29,12 @@ the caller's active Hospital, Department, NursingUnit, All, or own-record
 Assigned data scope. Lookup lists and unit assignment validation use the same
 scope boundaries. Document downloads use private, no-store response headers.
 
+Nurse lists, nurse details, edits, and deletion use those same scope boundaries.
+Roster lists and mutations additionally support Post and Shift scopes. Creating
+or moving a roster assignment validates its nurse, active unit, active shift,
+optional post, the post-to-unit relationship, and both the existing and target
+scope. A nurse detail only includes upcoming assignments visible to the caller.
+
 Creating/editing records requires the existing CREDENTIALS CREATE/EDIT
 permissions. Verification remains a separate CREDENTIALS VERIFY action. Editing
 details or replacing a document resets verification. The credential's template
