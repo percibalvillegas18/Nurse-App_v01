@@ -73,22 +73,27 @@ export class NursingService {
     unitId?: number;
     page?: number;
     limit?: number;
-  }) {
+  }, actorId: number) {
     const page = Math.max(1, params.page || 1);
     const limit = Math.min(100, Math.max(1, params.limit || 20));
     const where: any = { deleted_at: null };
+    const scope = await this.getScopeContext(actorId);
+    const scopeWhere = this.nurseScopeWhere(scope, actorId);
+    if (!scope.all) where.AND = [scopeWhere];
 
     if (params.status) where.status = params.status;
     if (params.unitId) where.home_unit_id = params.unitId;
     if (params.search) {
       const q = params.search.trim();
-      where.OR = [
+      const searchWhere = { OR: [
         { first_name: { contains: q, mode: 'insensitive' } },
         { middle_name: { contains: q, mode: 'insensitive' } },
         { last_name: { contains: q, mode: 'insensitive' } },
         { employee_number: { contains: q, mode: 'insensitive' } },
         { job_no: { contains: q, mode: 'insensitive' } },
-      ];
+      ] };
+      if (scope.all) where.OR = searchWhere.OR;
+      else where.AND.push(searchWhere);
     }
 
     const [rows, total] = await Promise.all([
@@ -126,7 +131,9 @@ export class NursingService {
     };
   }
 
-  async getNurse(id: number) {
+  async getNurse(id: number, actorId: number) {
+    await this.assertNurseScope(id, actorId);
+    const scope = await this.getScopeContext(actorId);
     const row = await this.prisma.nursing_nurses.findUnique({
       where: { id },
       include: {
@@ -138,7 +145,8 @@ export class NursingService {
           orderBy: { expiry_date: 'asc' },
         },
         roster_assignments: {
-          where: { deleted_at: null, assignment_date: { gte: this.startOfToday() } },
+          where: { deleted_at: null, assignment_date: { gte: this.startOfToday() },
+            ...(!scope.all && { AND: [this.rosterScopeWhere(scope, actorId)] }) },
           include: {
             nursing_unit: { select: { id: true, code: true, name: true } },
             shift: { select: { id: true, code: true, name: true } },
@@ -167,6 +175,7 @@ export class NursingService {
 
   async createNurse(dto: CreateNurseDto, actorId: number) {
     await this.validateStaffAssignment(dto, actorId);
+    await this.assertNurseDestinationScope(dto.home_unit_id, dto.user_id, actorId);
     // Employee number is not entered by the user in the personal-info form -
     // auto-generate a unique one (can be edited later in the employment group).
     if (!dto.employee_number) {
@@ -225,8 +234,13 @@ export class NursingService {
   }
 
   async updateNurse(id: number, dto: UpdateNurseDto, actorId: number) {
-    await this.ensureNurseExists(id);
+    const existing = await this.assertNurseScope(id, actorId);
     await this.validateStaffAssignment(dto, actorId);
+    await this.assertNurseDestinationScope(
+      dto.home_unit_id !== undefined ? dto.home_unit_id : Number(existing.home_unit_id) || null,
+      dto.user_id !== undefined ? dto.user_id : Number(existing.user_id) || null,
+      actorId,
+    );
     try {
       const updated = await this.prisma.nursing_nurses.update({
         where: { id },
@@ -283,7 +297,7 @@ export class NursingService {
   }
 
   async softDeleteNurse(id: number, actorId: number) {
-    await this.ensureNurseExists(id);
+    await this.assertNurseScope(id, actorId);
     await this.prisma.nursing_nurses.update({
       where: { id },
       data: { deleted_at: new Date(), status: 'Terminated', updated_by: actorId },
@@ -461,13 +475,15 @@ export class NursingService {
     unitId?: number;
     nurseId?: number;
     status?: string;
-  }) {
+  }, actorId: number) {
     const from = params.from ? new Date(params.from) : this.startOfToday();
     const to = params.to ? new Date(params.to) : new Date(from.getTime() + 31 * 86400000);
     const where: any = {
       deleted_at: null,
       assignment_date: { gte: from, lte: to },
     };
+    const scope = await this.getScopeContext(actorId);
+    if (!scope.all) where.AND = [this.rosterScopeWhere(scope, actorId)];
     if (params.unitId) where.nursing_unit_id = params.unitId;
     if (params.nurseId) where.nurse_id = params.nurseId;
     if (params.status) where.status = params.status;
@@ -492,7 +508,7 @@ export class NursingService {
   }
 
   async createRosterAssignment(dto: CreateRosterAssignmentDto, actorId: number) {
-    await this.ensureNurseExists(dto.nurse_id);
+    await this.validateRosterAssignmentScope(dto, actorId);
     try {
       const created = await this.prisma.nursing_roster_assignments.create({
         data: {
@@ -532,7 +548,8 @@ export class NursingService {
   }
 
   async updateRosterAssignment(id: number, dto: UpdateRosterAssignmentDto, actorId: number) {
-    await this.ensureRosterExists(id);
+    const existing = await this.assertRosterScope(id, actorId);
+    await this.validateRosterAssignmentScope({ ...existing, ...dto }, actorId);
     try {
       const updated = await this.prisma.nursing_roster_assignments.update({
         where: { id },
@@ -576,7 +593,7 @@ export class NursingService {
   }
 
   async softDeleteRosterAssignment(id: number, actorId: number) {
-    await this.ensureRosterExists(id);
+    await this.assertRosterScope(id, actorId);
     await this.prisma.nursing_roster_assignments.update({
       where: { id },
       data: { deleted_at: new Date(), status: 'Cancelled', updated_by: actorId },
@@ -604,6 +621,7 @@ export class NursingService {
       OR: [
         ...(scope.departmentIds.length ? [{ id: { in: scope.departmentIds } }] : []),
         ...(scope.organizationIds.length ? [{ organization_id: { in: scope.organizationIds } }] : []),
+        ...(scope.postIds.length ? [{ nursing_units: { some: { posts: { some: { id: { in: scope.postIds } } } } } }] : []),
       ],
     };
     const unitScope = scope.all ? {} : {
@@ -611,6 +629,7 @@ export class NursingService {
         ...(scope.nursingUnitIds.length ? [{ id: { in: scope.nursingUnitIds } }] : []),
         ...(scope.departmentIds.length ? [{ department_id: { in: scope.departmentIds } }] : []),
         ...(scope.organizationIds.length ? [{ department: { organization_id: { in: scope.organizationIds } } }] : []),
+        ...(scope.postIds.length ? [{ posts: { some: { id: { in: scope.postIds } } } }] : []),
       ],
     };
     const postScope = scope.all ? {} : {
@@ -618,8 +637,14 @@ export class NursingService {
         ...(scope.nursingUnitIds.length ? [{ nursing_unit_id: { in: scope.nursingUnitIds } }] : []),
         ...(scope.departmentIds.length ? [{ nursing_unit: { department_id: { in: scope.departmentIds } } }] : []),
         ...(scope.organizationIds.length ? [{ nursing_unit: { department: { organization_id: { in: scope.organizationIds } } } }] : []),
+        ...(scope.postIds.length ? [{ id: { in: scope.postIds } }] : []),
       ],
     };
+    const hasBroadRosterScope = scope.all || scope.assigned || scope.organizationIds.length
+      || scope.departmentIds.length || scope.nursingUnitIds.length || scope.postIds.length;
+    const shiftScope = hasBroadRosterScope ? {} : scope.shiftIds.length
+      ? { id: { in: scope.shiftIds } }
+      : { id: -1 };
     const [roles, units, shifts, posts, departments] = await Promise.all([
       this.prisma.system_hospital_roles.findMany({
         where: { status: 'Active' },
@@ -632,7 +657,7 @@ export class NursingService {
         orderBy: { code: 'asc' },
       }),
       this.prisma.rbac_shifts.findMany({
-        where: { status: 'Active' },
+        where: { status: 'Active', ...shiftScope },
         select: { id: true, code: true, name: true, start_time: true, end_time: true },
         orderBy: { id: 'asc' },
       }),
@@ -807,7 +832,8 @@ export class NursingService {
           { OR: [{ effective_to: null }, { effective_to: { gte: now } }] },
         ],
       },
-      select: { scope_type: true, organization_id: true, department_id: true, nursing_unit_id: true },
+      select: { scope_type: true, organization_id: true, department_id: true, nursing_unit_id: true,
+        post_id: true, shift_id: true },
     });
     return {
       all: scopes.some((s: any) => s.scope_type === 'All'),
@@ -815,11 +841,14 @@ export class NursingService {
       organizationIds: scopes.filter((s: any) => s.scope_type === 'Hospital' && s.organization_id != null).map((s: any) => s.organization_id),
       departmentIds: scopes.filter((s: any) => s.scope_type === 'Department' && s.department_id != null).map((s: any) => s.department_id),
       nursingUnitIds: scopes.filter((s: any) => s.scope_type === 'NursingUnit' && s.nursing_unit_id != null).map((s: any) => s.nursing_unit_id),
+      postIds: scopes.filter((s: any) => s.scope_type === 'Post' && s.post_id != null).map((s: any) => s.post_id),
+      shiftIds: scopes.filter((s: any) => s.scope_type === 'Shift' && s.shift_id != null).map((s: any) => s.shift_id),
     };
   }
 
   private scopeAllowsUnit(scope: any, unit: any): boolean {
     if (scope.all) return true;
+    if (!unit) return false;
     const unitId = String(unit.id);
     const departmentId = String(unit.department_id ?? unit.department?.id ?? '');
     const organizationId = String(unit.department?.organization_id ?? '');
@@ -836,6 +865,67 @@ export class NursingService {
     if (scope.departmentIds.length) OR.push({ home_unit: { department_id: { in: scope.departmentIds } } });
     if (scope.organizationIds.length) OR.push({ home_unit: { department: { organization_id: { in: scope.organizationIds } } } });
     return { OR };
+  }
+
+  private rosterScopeWhere(scope: any, actorId: number): any {
+    if (scope.all) return {};
+    const OR: any[] = [];
+    if (scope.assigned) OR.push({ nurse: { user_id: actorId } });
+    if (scope.nursingUnitIds.length) OR.push({ nursing_unit_id: { in: scope.nursingUnitIds } });
+    if (scope.departmentIds.length) OR.push({ nursing_unit: { department_id: { in: scope.departmentIds } } });
+    if (scope.organizationIds.length) OR.push({ nursing_unit: { department: { organization_id: { in: scope.organizationIds } } } });
+    if (scope.postIds.length) OR.push({ post_id: { in: scope.postIds } });
+    if (scope.shiftIds.length) OR.push({ shift_id: { in: scope.shiftIds } });
+    return { OR };
+  }
+
+  private scopeAllowsRoster(scope: any, assignment: any, actorId: number): boolean {
+    if (scope.all) return true;
+    return (scope.assigned && Number(assignment.nurse?.user_id) === actorId)
+      || this.scopeAllowsUnit(scope, assignment.nursing_unit)
+      || scope.postIds.some((id: any) => String(id) === String(assignment.post_id ?? ''))
+      || scope.shiftIds.some((id: any) => String(id) === String(assignment.shift_id));
+  }
+
+  private async assertNurseDestinationScope(homeUnitId: number | null | undefined, userId: number | null | undefined, actorId: number) {
+    const scope = await this.getScopeContext(actorId);
+    if (scope.all || (scope.assigned && Number(userId) === actorId)) return;
+    if (homeUnitId != null) {
+      const unit = await this.prisma.rbac_nursing_units.findFirst({
+        where: { id: homeUnitId, status: 'Active', department: { status: 'Active' } },
+        include: { department: { select: { id: true, organization_id: true } } },
+      });
+      if (unit && this.scopeAllowsUnit(scope, unit)) return;
+    }
+    throw new ForbiddenException('The staff assignment is outside your assigned scope');
+  }
+
+  private async validateRosterAssignmentScope(dto: any, actorId: number) {
+    const [nurse, unit, shift, post, scope] = await Promise.all([
+      this.prisma.nursing_nurses.findUnique({ where: { id: Number(dto.nurse_id) } }),
+      this.prisma.rbac_nursing_units.findFirst({
+        where: { id: Number(dto.nursing_unit_id), status: 'Active', department: { status: 'Active' } },
+        include: { department: { select: { id: true, organization_id: true } } },
+      }),
+      this.prisma.rbac_shifts.findFirst({ where: { id: Number(dto.shift_id), status: 'Active' } }),
+      dto.post_id == null ? Promise.resolve(null) : this.prisma.rbac_posts.findFirst({
+        where: { id: Number(dto.post_id), status: 'Active' },
+      }),
+      this.getScopeContext(actorId),
+    ]);
+    if (!nurse || nurse.deleted_at) throw new NotFoundException(`Nurse #${dto.nurse_id} not found`);
+    if (!unit) throw new BadRequestException('Select an active nursing unit');
+    if (!shift) throw new BadRequestException('Select an active shift');
+    if (dto.post_id != null && !post) throw new BadRequestException('Select an active post');
+    if (post && Number(post.nursing_unit_id) !== Number(unit.id)) {
+      throw new BadRequestException('The selected post does not belong to the nursing unit');
+    }
+    if (!this.scopeAllowsRoster(scope, {
+      nurse,
+      nursing_unit: unit,
+      post_id: dto.post_id,
+      shift_id: dto.shift_id,
+    }, actorId)) throw new ForbiddenException('The roster assignment is outside your assigned scope');
   }
 
   private async assertNurseScope(nurseId: number, actorId: number) {
@@ -856,9 +946,20 @@ export class NursingService {
     return credential;
   }
 
-  private async ensureRosterExists(id: number) {
-    const row = await this.prisma.nursing_roster_assignments.findUnique({ where: { id } });
+  private async assertRosterScope(id: number, actorId: number) {
+    const row = await this.prisma.nursing_roster_assignments.findUnique({
+      where: { id },
+      include: {
+        nurse: { select: { user_id: true } },
+        nursing_unit: { include: { department: true } },
+      },
+    });
     if (!row || row.deleted_at) throw new NotFoundException(`Roster assignment #${id} not found`);
+    const scope = await this.getScopeContext(actorId);
+    if (!this.scopeAllowsRoster(scope, row, actorId)) {
+      throw new ForbiddenException('This roster assignment is outside your assigned scope');
+    }
+    return row;
   }
 
   /** Map Prisma unique-violation (P2002) to a friendly 409, rethrow otherwise. */
